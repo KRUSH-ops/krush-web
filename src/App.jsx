@@ -1122,17 +1122,20 @@ function CreditVoteModal({ entry, remaining, onConfirm, onClose }) {
 }
 
 // ---------- ENTRY ROW ----------
-function EntryRow({ entry, content, voteTotal, isSelf, live, freeVoteUsed, credits, onFreeVote, onOpenCredits, onComment, onShare, refreshTick }) {
+function EntryRow({ entry, content, voteTotal, isSelf, live, freeVoteUsed, credits, onFreeVote, onOpenCredits, onComment, onShare, onOpenViewer, refreshTick }) {
   const [commentCount, setCommentCount] = useState(() => mockCommentsFor(entry.id).length);
   useEffect(() => { countTopLevelComments(entry.id).then(setCommentCount); }, [entry.id, refreshTick]);
   return (
     <div style={{ background: C.surface }} className="rounded-xl p-4 flex flex-col gap-2">
       <div className="flex items-center gap-3">
-        {content?.videoUrl ? (
-          <video src={content.videoUrl} controls playsInline className="w-16 h-16 rounded-lg flex-shrink-0 object-cover" style={{ background: '#000' }} />
-        ) : (
-          <div style={{ background: C.surface2 }} className="w-12 h-12 rounded-lg flex items-center justify-center text-2xl flex-shrink-0">{content?.kind === 'photo' ? '🖼️' : '🎬'}</div>
-        )}
+        <button onClick={() => onOpenViewer && onOpenViewer(entry)} aria-label="Open video" className="relative w-16 h-16 rounded-lg flex-shrink-0 overflow-hidden" style={{ background: C.surface2 }}>
+          {content?.videoUrl ? (
+            <video src={`${content.videoUrl}#t=0.1`} preload="metadata" muted playsInline className="w-full h-full object-cover pointer-events-none" />
+          ) : (
+            <span className="w-full h-full flex items-center justify-center text-2xl">{content?.kind === 'photo' ? '🖼️' : '🎬'}</span>
+          )}
+          <span className="absolute inset-0 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.25)' }}><span style={{ color: 'white' }} className="text-lg">▶</span></span>
+        </button>
         <div className="flex-1 min-w-0">
           <div style={{ color: C.paper }} className="font-semibold text-sm truncate">@{entry.username}{isSelf && <span style={{ color: C.muted }} className="font-normal"> (you)</span>}</div>
           {content?.title && <div style={{ color: C.paper }} className="text-xs font-medium truncate">{content.title}</div>}
@@ -1161,6 +1164,118 @@ function EntryRow({ entry, content, voteTotal, isSelf, live, freeVoteUsed, credi
   );
 }
 
+// ---------- FULL-SCREEN VERTICAL VIDEO VIEWER ----------
+// Reuses the competition's existing vote / comment / share handlers (passed in) — it creates no vote or
+// comment records of its own. Order is frozen when opened so swiping isn't scrambled by live vote re-sorting.
+function FeedItemMeta({ entryId, refreshTick, children }) {
+  const [n, setN] = useState(() => mockCommentsFor(entryId).length);
+  useEffect(() => { countTopLevelComments(entryId).then(setN); }, [entryId, refreshTick]);
+  return children(n);
+}
+function FeedVideo({ url, active, near, muted }) {
+  const ref = useRef(null);
+  const [paused, setPaused] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const [buffering, setBuffering] = useState(true);
+  useEffect(() => {
+    const v = ref.current; if (!v) return;
+    if (active) {
+      v.muted = muted;
+      const p = v.play(); if (p && p.catch) p.catch(() => setPaused(true)); // autoplay blocked -> user taps to play
+    } else { v.pause(); try { v.currentTime = 0; } catch {} setPaused(false); }
+  }, [active]);
+  useEffect(() => { if (ref.current) ref.current.muted = muted; }, [muted]);
+  const toggle = () => {
+    const v = ref.current; if (!v) return;
+    if (v.paused) { v.play().then(() => setPaused(false)).catch(() => setPaused(true)); } else { v.pause(); setPaused(true); }
+  };
+  if (!near) return <div className="absolute inset-0 flex items-center justify-center" style={{ background: '#000' }}><span className="text-4xl">🎬</span></div>;
+  if (failed) return <div className="absolute inset-0 flex flex-col items-center justify-center gap-2" style={{ background: '#000', color: C.muted }}><span className="text-4xl">⚠️</span><span className="text-xs px-8 text-center">This video couldn't be played. Check your connection and try again.</span><button onClick={() => { setFailed(false); setBuffering(true); }} style={{ background: C.surface2, color: C.paper }} className="px-4 py-2 rounded-lg text-xs font-bold">Retry</button></div>;
+  return (
+    <div className="absolute inset-0" style={{ background: '#000' }} onClick={toggle}>
+      <video ref={ref} src={url} loop playsInline muted={muted} preload={active ? 'auto' : 'metadata'}
+        onError={() => setFailed(true)} onWaiting={() => setBuffering(true)} onCanPlay={() => setBuffering(false)} onPlaying={() => { setBuffering(false); setPaused(false); }}
+        className="w-full h-full" style={{ objectFit: 'contain' }} />
+      {active && buffering && !paused && <div className="absolute inset-0 flex items-center justify-center pointer-events-none"><div className="w-8 h-8 rounded-full border-2 animate-spin" style={{ borderColor: 'rgba(255,255,255,0.3)', borderTopColor: 'white' }} /></div>}
+      {paused && <div className="absolute inset-0 flex items-center justify-center pointer-events-none"><span style={{ background: 'rgba(0,0,0,0.5)', color: 'white' }} className="w-16 h-16 rounded-full flex items-center justify-center text-3xl">▶</span></div>}
+    </div>
+  );
+}
+function VideoFeedViewer({ order, startIndex, entries, contents, voteTotals, comp, user, live, freeVoteUsed, credits, statusText, commentsTick, onFreeVote, onOpenCredits, onComment, onShare, onClose }) {
+  const items = order.map(id => entries.find(e => e.id === id)).filter(Boolean);
+  const scroller = useRef(null);
+  const [active, setActive] = useState(startIndex);
+  const [muted, setMuted] = useState(true); // browsers only allow autoplay when muted; user can unmute with one tap
+  const [avatars, setAvatars] = useState({});
+  useEffect(() => {
+    const el = scroller.current; if (!el) return;
+    el.scrollTop = startIndex * el.clientHeight;
+  }, []);
+  useEffect(() => {
+    (async () => {
+      const m = {};
+      for (const e of items) { const u = await sGet(`user:${e.username}`, true); if (u?.avatar && typeof u.avatar === 'string' && u.avatar.length <= 8) m[e.username] = u.avatar; }
+      setAvatars(m);
+    })();
+  }, [order.join(',')]);
+  const onScroll = () => {
+    const el = scroller.current; if (!el || !el.clientHeight) return;
+    const i = Math.round(el.scrollTop / el.clientHeight);
+    if (i !== active && i >= 0 && i < items.length) setActive(i);
+  };
+  return (
+    <div className="fixed inset-0 z-40 flex flex-col" style={{ background: '#000' }}>
+      <div ref={scroller} onScroll={onScroll} className="absolute inset-0 overflow-y-scroll" style={{ scrollSnapType: 'y mandatory', overscrollBehavior: 'contain', WebkitOverflowScrolling: 'touch' }}>
+        {items.map((e, i) => {
+          const c = contents[e.contentId];
+          const isSelf = e.username === user.username;
+          return (
+            <div key={e.id} className="relative w-full" style={{ height: '100%', minHeight: '100%', scrollSnapAlign: 'start', scrollSnapStop: 'always' }}>
+              {c?.videoUrl ? <FeedVideo url={c.videoUrl} active={i === active} near={Math.abs(i - active) <= 1} muted={muted} />
+                : <div className="absolute inset-0 flex flex-col items-center justify-center gap-3" style={{ background: `linear-gradient(160deg, ${C.surface2}, ${C.ink})` }}><span className="text-6xl">🎬</span><span style={{ color: C.muted }} className="text-xs px-10 text-center">Demo entry — no video attached</span></div>}
+              <div className="absolute left-0 right-0 bottom-0 pointer-events-none" style={{ height: '45%', background: 'linear-gradient(to top, rgba(0,0,0,0.75), rgba(0,0,0,0))' }} />
+              <div className="absolute left-4 right-20 bottom-6 pointer-events-none">
+                <div className="flex items-center gap-2 mb-1">
+                  <span style={{ background: C.surface2 }} className="w-9 h-9 rounded-full flex items-center justify-center text-lg">{avatars[e.username] || '🙂'}</span>
+                  <span style={{ color: 'white' }} className="font-bold text-sm">@{e.username}{isSelf && ' (you)'}</span>
+                </div>
+                {c?.caption && <div style={{ color: 'white' }} className="text-sm mb-1 line-clamp-2">{c.caption}</div>}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span style={{ background: 'rgba(46,91,255,0.85)', color: 'white' }} className="text-[10px] font-bold px-2 py-0.5 rounded-full">{CAT_EMOJI[comp.category]} {comp.category}</span>
+                  <span style={{ background: 'rgba(0,0,0,0.55)', color: C.pink }} className="text-[10px] font-bold px-2 py-0.5 rounded-full">{statusText}</span>
+                </div>
+              </div>
+              <FeedItemMeta entryId={e.id} refreshTick={commentsTick}>{(n) => (
+                <div className="absolute right-3 bottom-8 flex flex-col items-center gap-4">
+                  <div className="flex flex-col items-center">
+                    {isSelf ? <span style={{ background: 'rgba(0,0,0,0.55)', color: C.muted }} className="w-12 h-12 rounded-full flex items-center justify-center text-[9px] font-bold text-center leading-tight">Your<br />entry</span>
+                      : !live ? <span style={{ background: 'rgba(0,0,0,0.55)', color: C.muted }} className="w-12 h-12 rounded-full flex items-center justify-center text-[9px] font-bold text-center leading-tight">Voting<br />ended</span>
+                      : !freeVoteUsed ? <button onClick={() => onFreeVote(e)} style={{ background: C.pink, color: 'white' }} className="w-12 h-12 rounded-full flex items-center justify-center"><Heart size={22} /></button>
+                      : credits > 0 ? <button onClick={() => onOpenCredits(e)} style={{ background: 'rgba(255,46,126,0.85)', color: 'white' }} className="w-12 h-12 rounded-full flex items-center justify-center"><Zap size={22} /></button>
+                      : <span style={{ background: 'rgba(0,0,0,0.55)', color: C.muted }} className="w-12 h-12 rounded-full flex items-center justify-center text-[9px] font-bold text-center leading-tight">No<br />credits</span>}
+                    <span style={{ color: 'white' }} className="text-xs font-bold mt-1">{voteTotals[e.id] || 0}</span>
+                  </div>
+                  <div className="flex flex-col items-center">
+                    <button onClick={() => onComment(e)} style={{ background: 'rgba(0,0,0,0.55)', color: 'white' }} className="w-12 h-12 rounded-full flex items-center justify-center text-xl">💬</button>
+                    <span style={{ color: 'white' }} className="text-xs font-bold mt-1">{n}</span>
+                  </div>
+                  <div className="flex flex-col items-center">
+                    <button onClick={() => onShare(e)} style={{ background: 'rgba(0,0,0,0.55)', color: 'white' }} className="w-12 h-12 rounded-full flex items-center justify-center text-xl">↗</button>
+                    <span style={{ color: 'white' }} className="text-xs font-bold mt-1">Share</span>
+                  </div>
+                </div>
+              )}</FeedItemMeta>
+            </div>
+          );
+        })}
+      </div>
+      <button onClick={onClose} aria-label="Close" style={{ background: 'rgba(0,0,0,0.55)', color: 'white', top: 'max(12px, env(safe-area-inset-top))' }} className="absolute left-3 w-10 h-10 rounded-full flex items-center justify-center"><ChevronLeft size={22} /></button>
+      <button onClick={() => setMuted(m => !m)} aria-label={muted ? 'Unmute' : 'Mute'} style={{ background: 'rgba(0,0,0,0.55)', color: 'white', top: 'max(12px, env(safe-area-inset-top))' }} className="absolute right-3 h-10 px-3 rounded-full flex items-center justify-center text-xs font-bold">{muted ? '🔇 Tap for sound' : '🔊'}</button>
+      <div style={{ color: 'rgba(255,255,255,0.7)', top: 'max(20px, calc(env(safe-area-inset-top) + 8px))' }} className="absolute left-0 right-0 text-center text-xs font-semibold pointer-events-none">{active + 1} / {items.length}</div>
+    </div>
+  );
+}
+
 // ---------- COMPETITION DETAIL ----------
 function CompetitionDetail({ comp: compProp, user, onBack, onToast, onCompUpdated, initialIntent }) {
   const [comp, setComp] = useState(compProp);
@@ -1175,6 +1290,7 @@ function CompetitionDetail({ comp: compProp, user, onBack, onToast, onCompUpdate
   const [commentsTick, setCommentsTick] = useState(0);
   const closeComments = () => { setCommentsFor(null); setCommentsTick(t => t + 1); };
   const [shareForEntry, setShareForEntry] = useState(null);
+  const [viewer, setViewer] = useState(null); // { order: [entryIds], startIndex }
   const [celebrate, setCelebrate] = useState(false);
   const [role, setRole] = useState(null); // null | 'viewer' | 'competitor'
   const [phase, setPhase] = useState('preview'); // preview | confirm | uploading | main
@@ -1232,8 +1348,9 @@ function CompetitionDetail({ comp: compProp, user, onBack, onToast, onCompUpdate
     onCompUpdated(updated);
   }, [onCompUpdated]);
 
+  const hasLoadedRef = useRef(false);
   const load = useCallback(async () => {
-    setLoading(true);
+    if (!hasLoadedRef.current) setLoading(true);
     const fresh = (await sGet(`comp:${comp.id}`, true)) || comp;
     const entryRecs = await getEffectiveEntries(fresh.id);
     setEntries(entryRecs);
@@ -1246,7 +1363,7 @@ function CompetitionDetail({ comp: compProp, user, onBack, onToast, onCompUpdate
 
     if (fresh.status !== 'ended' && fresh.countdownStartedAt && Date.now() >= fresh.endsAt) {
       await finishCompetition(fresh, entryRecs);
-      setLoading(false);
+      hasLoadedRef.current = true; setLoading(false);
       return;
     }
     // Activate the 24h countdown the moment a 2nd contestant is present (covers both new entries and older/migrated data)
@@ -1278,7 +1395,7 @@ function CompetitionDetail({ comp: compProp, user, onBack, onToast, onCompUpdate
     else if (initialIntent === 'viewer') setPhase('confirmViewer');
     else setPhase('preview');
 
-    setLoading(false);
+    hasLoadedRef.current = true; setLoading(false);
   }, [comp.id, user.username, finishCompetition, initialIntent]);
 
   useEffect(() => { load(); }, []);
@@ -2047,12 +2164,16 @@ function CompetitionDetail({ comp: compProp, user, onBack, onToast, onCompUpdate
                 <EntryRow entry={e} content={contents[e.contentId]} voteTotal={voteTotals[e.id] || 0} refreshTick={commentsTick}
                   isSelf={e.username === user.username} live={comp.status !== 'ended'} freeVoteUsed={freeVoteUsed} credits={credits}
                   onFreeVote={castFreeVote} onOpenCredits={(entry) => setCreditEntry(entry)}
-                  onComment={(entry) => setCommentsFor(entry)} onShare={(entry) => setShareForEntry(entry)} />
+                  onComment={(entry) => setCommentsFor(entry)} onShare={(entry) => setShareForEntry(entry)}
+                  onOpenViewer={(entry) => setViewer({ order: sorted.map(x => x.id), startIndex: Math.max(0, sorted.findIndex(x => x.id === entry.id)) })} />
               </div>
             ))}
           </div>
         )}
       </div>
+      {viewer && <VideoFeedViewer order={viewer.order} startIndex={viewer.startIndex} entries={entries} contents={contents} voteTotals={voteTotals} comp={comp} user={user}
+        live={comp.status !== 'ended'} freeVoteUsed={freeVoteUsed} credits={credits} statusText={isEnded ? 'Competition ended' : comp.countdownStartedAt ? `⏱ ${countdownText}` : statusText} commentsTick={commentsTick}
+        onFreeVote={castFreeVote} onOpenCredits={(entry) => setCreditEntry(entry)} onComment={(entry) => setCommentsFor(entry)} onShare={(entry) => setShareForEntry(entry)} onClose={() => setViewer(null)} />}
       {creditEntry && <CreditVoteModal entry={creditEntry} remaining={credits} onConfirm={confirmCreditVote} onClose={() => setCreditEntry(null)} />}
       {commentsFor && <CommentsSheet targetId={commentsFor.id} targetLabel={`@${commentsFor.username}`} user={user} onClose={closeComments} onToast={onToast} />}
       {shareForEntry && <ShareSheet item={{ id: shareForEntry.id, username: shareForEntry.username, caption: contents[shareForEntry.contentId]?.caption || '', compTitle: comp.title }} user={user} onClose={() => setShareForEntry(null)} onToast={onToast} />}
