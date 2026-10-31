@@ -1209,16 +1209,24 @@ function parseDob(m, d, y) {
   return { iso: `${yy}-${p2(mm)}-${p2(dd)}` };
 }
 const SOCIAL_FIELDS = [
-  { k: 'instagram', label: 'Instagram', icon: '📷', ph: 'instagram.com/yourname', hosts: ['instagram.com'] },
-  { k: 'tiktok', label: 'TikTok', icon: '🎵', ph: 'tiktok.com/@yourname', hosts: ['tiktok.com'] },
-  { k: 'facebook', label: 'Facebook', icon: '👍', ph: 'facebook.com/yourname', hosts: ['facebook.com', 'fb.com', 'fb.me'] },
-  { k: 'youtube', label: 'YouTube', icon: '▶️', ph: 'youtube.com/@yourchannel', hosts: ['youtube.com', 'youtu.be'] },
-  { k: 'website', label: 'Website', icon: '🌐', ph: 'yourwebsite.com', hosts: null },
+  { k: 'instagram', label: 'Instagram', ph: 'sunnidai', help: 'Just your username', hosts: ['instagram.com'], handleRe: /^[A-Za-z0-9._]{1,30}$/, build: (h) => `https://www.instagram.com/${h}/`, from: /^https:\/\/(?:www\.)?instagram\.com\/([A-Za-z0-9._]+)\/?$/ },
+  { k: 'tiktok', label: 'TikTok', ph: 'sunnidai', help: 'Just your username (the @ is optional)', hosts: ['tiktok.com'], handleRe: /^[A-Za-z0-9._]{2,24}$/, build: (h) => `https://www.tiktok.com/@${h}`, from: /^https:\/\/(?:www\.)?tiktok\.com\/@([A-Za-z0-9._]+)\/?$/ },
+  { k: 'facebook', label: 'Facebook', ph: 'username, or paste your full profile link', help: 'Username works for most pages. If it opens the wrong page, paste your full profile link instead.', hosts: ['facebook.com', 'fb.com', 'fb.me'], handleRe: /^[A-Za-z0-9.]{5,50}$/, build: (h) => `https://www.facebook.com/${h}`, from: /^https:\/\/(?:www\.)?facebook\.com\/([A-Za-z0-9.]+)\/?$/ },
+  { k: 'youtube', label: 'YouTube', ph: '@channelname, or paste your full channel link', help: 'A @channelname works for most channels. Otherwise paste your full channel link.', hosts: ['youtube.com', 'youtu.be'], handleRe: /^[A-Za-z0-9._-]{3,30}$/, build: (h) => `https://www.youtube.com/@${h}`, from: /^https:\/\/(?:www\.)?youtube\.com\/@([A-Za-z0-9._-]+)\/?$/ },
+  { k: 'website', label: 'Website', ph: 'yourwebsite.com', help: 'Your full website address', hosts: null },
 ];
+// Turns what the user typed (a username/handle OR a full link) into a safe https link.
 function normalizeLink(field, raw) {
   const t = (raw || '').trim();
   if (!t) return { value: '' };
-  if (t.length > 200) return { error: 'That link is too long.' };
+  if (t.length > 200) return { error: 'That is too long.' };
+  const lower = t.toLowerCase();
+  const looksLikeUrl = !field.build || /^[a-z][a-z0-9+.-]*:\/\//i.test(t) || t.includes('/') || (field.hosts || []).some(h => lower.includes(h));
+  if (!looksLikeUrl) {
+    const h = t.replace(/^@+/, '');
+    if (!field.handleRe.test(h)) return { error: `That doesn't look like a valid ${field.label} username.` };
+    return { value: field.build(h) };
+  }
   const s = /^[a-z][a-z0-9+.-]*:/i.test(t) ? t : `https://${t}`;
   let u; try { u = new URL(s); } catch { return { error: "That doesn't look like a valid link." }; }
   if (u.protocol !== 'https:' && u.protocol !== 'http:') return { error: 'Links must start with http:// or https://' };
@@ -1227,6 +1235,12 @@ function normalizeLink(field, raw) {
   if (field.hosts && !field.hosts.some(d => host === d || host.endsWith('.' + d))) return { error: `That doesn't look like a ${field.label} link.` };
   u.protocol = 'https:';
   return { value: u.href };
+}
+// For editing: show a saved link back as just the username when we can.
+function linkToInput(field, url) {
+  if (!url) return '';
+  if (field.from) { const m = url.match(field.from); if (m) return field.k === 'tiktok' || field.k === 'youtube' ? `@${m[1]}` : m[1]; }
+  return url;
 }
 async function uploadProfilePhoto(blob) {
   const fd = new FormData();
@@ -1237,14 +1251,37 @@ async function uploadProfilePhoto(blob) {
   if (!res.ok || !data.secure_url) throw new Error(data?.error?.message || 'Photo upload failed');
   return data.secure_url;
 }
+// Brand + UI icon paths from Font Awesome Free (CC BY 4.0, fontawesome.com/license/free). Inline so no extra package is needed.
+const ICON_PATHS = {"instagram":{"vb":"0 0 448 512","d":"M224.3 141a115 115 0 1 0 -.6 230 115 115 0 1 0 .6-230zm-.6 40.4a74.6 74.6 0 1 1 .6 149.2 74.6 74.6 0 1 1 -.6-149.2zm93.4-45.1a26.8 26.8 0 1 1 53.6 0 26.8 26.8 0 1 1 -53.6 0zm129.7 27.2c-1.7-35.9-9.9-67.7-36.2-93.9-26.2-26.2-58-34.4-93.9-36.2-37-2.1-147.9-2.1-184.9 0-35.8 1.7-67.6 9.9-93.9 36.1s-34.4 58-36.2 93.9c-2.1 37-2.1 147.9 0 184.9 1.7 35.9 9.9 67.7 36.2 93.9s58 34.4 93.9 36.2c37 2.1 147.9 2.1 184.9 0 35.9-1.7 67.7-9.9 93.9-36.2 26.2-26.2 34.4-58 36.2-93.9 2.1-37 2.1-147.8 0-184.8zM399 388c-7.8 19.6-22.9 34.7-42.6 42.6-29.5 11.7-99.5 9-132.1 9s-102.7 2.6-132.1-9c-19.6-7.8-34.7-22.9-42.6-42.6-11.7-29.5-9-99.5-9-132.1s-2.6-102.7 9-132.1c7.8-19.6 22.9-34.7 42.6-42.6 29.5-11.7 99.5-9 132.1-9s102.7-2.6 132.1 9c19.6 7.8 34.7 22.9 42.6 42.6 11.7 29.5 9 99.5 9 132.1s2.7 102.7-9 132.1z"},"tiktok":{"vb":"0 0 448 512","d":"M448.5 209.9c-44 .1-87-13.6-122.8-39.2l0 178.7c0 33.1-10.1 65.4-29 92.6s-45.6 48-76.6 59.6-64.8 13.5-96.9 5.3-60.9-25.9-82.7-50.8-35.3-56-39-88.9 2.9-66.1 18.6-95.2 40-52.7 69.6-67.7 62.9-20.5 95.7-16l0 89.9c-15-4.7-31.1-4.6-46 .4s-27.9 14.6-37 27.3-14 28.1-13.9 43.9 5.2 31 14.5 43.7 22.4 22.1 37.4 26.9 31.1 4.8 46-.1 28-14.4 37.2-27.1 14.2-28.1 14.2-43.8l0-349.4 88 0c-.1 7.4 .6 14.9 1.9 22.2 3.1 16.3 9.4 31.9 18.7 45.7s21.3 25.6 35.2 34.6c19.9 13.1 43.2 20.1 67 20.1l0 87.4z"},"facebook":{"vb":"0 0 512 512","d":"M512 256C512 114.6 397.4 0 256 0S0 114.6 0 256C0 376 82.7 476.8 194.2 504.5l0-170.3-52.8 0 0-78.2 52.8 0 0-33.7c0-87.1 39.4-127.5 125-127.5 16.2 0 44.2 3.2 55.7 6.4l0 70.8c-6-.6-16.5-1-29.6-1-42 0-58.2 15.9-58.2 57.2l0 27.8 83.6 0-14.4 78.2-69.3 0 0 175.9C413.8 494.8 512 386.9 512 256z"},"youtube":{"vb":"0 0 576 512","d":"M549.7 124.1C543.5 100.4 524.9 81.8 501.4 75.5 458.9 64 288.1 64 288.1 64S117.3 64 74.7 75.5C51.2 81.8 32.7 100.4 26.4 124.1 15 167 15 256.4 15 256.4s0 89.4 11.4 132.3c6.3 23.6 24.8 41.5 48.3 47.8 42.6 11.5 213.4 11.5 213.4 11.5s170.8 0 213.4-11.5c23.5-6.3 42-24.2 48.3-47.8 11.4-42.9 11.4-132.3 11.4-132.3s0-89.4-11.4-132.3zM232.2 337.6l0-162.4 142.7 81.2-142.7 81.2z"},"visa":{"vb":"0 0 576 512","d":"M470.1 231.3s7.6 37.2 9.3 45l-33.4 0c3.3-8.9 16-43.5 16-43.5-.2 .3 3.3-9.1 5.3-14.9l2.8 13.4zM576 80l0 352c0 26.5-21.5 48-48 48L48 480c-26.5 0-48-21.5-48-48L0 80C0 53.5 21.5 32 48 32l480 0c26.5 0 48 21.5 48 48zM152.5 331.2l63.2-155.2-42.5 0-39.3 106-4.3-21.5-14-71.4c-2.3-9.9-9.4-12.7-18.2-13.1l-64.7 0-.7 3.1c15.8 4 29.9 9.8 42.2 17.1l35.8 135 42.5 0zm94.4 .2l25.2-155.4-40.2 0-25.1 155.4 40.1 0zm139.9-50.8c.2-17.7-10.6-31.2-33.7-42.3-14.1-7.1-22.7-11.9-22.7-19.2 .2-6.6 7.3-13.4 23.1-13.4 13.1-.3 22.7 2.8 29.9 5.9l3.6 1.7 5.5-33.6c-7.9-3.1-20.5-6.6-36-6.6-39.7 0-67.6 21.2-67.8 51.4-.3 22.3 20 34.7 35.2 42.2 15.5 7.6 20.8 12.6 20.8 19.3-.2 10.4-12.6 15.2-24.1 15.2-16 0-24.6-2.5-37.7-8.3l-5.3-2.5-5.6 34.9c9.4 4.3 26.8 8.1 44.8 8.3 42.2 .1 69.7-20.8 70-53zM528 331.4l-32.4-155.4-31.1 0c-9.6 0-16.9 2.8-21 12.9l-59.7 142.5 42.2 0s6.9-19.2 8.4-23.3l51.6 0c1.2 5.5 4.8 23.3 4.8 23.3l37.2 0z"},"mastercard":{"vb":"0 0 576 512","d":"M482.9 410.3c0 6.8-4.6 11.7-11.2 11.7-6.8 0-11.2-5.2-11.2-11.7s4.4-11.7 11.2-11.7c6.6 0 11.2 5.2 11.2 11.7zM172.1 398.6c-7.1 0-11.2 5.2-11.2 11.7S165 422 172.1 422c6.5 0 10.9-4.9 10.9-11.7-.1-6.5-4.4-11.7-10.9-11.7zm117.5-.3c-5.4 0-8.7 3.5-9.5 8.7l19.1 0c-.9-5.7-4.4-8.7-9.6-8.7zm107.8 .3c-6.8 0-10.9 5.2-10.9 11.7s4.1 11.7 10.9 11.7 11.2-4.9 11.2-11.7c0-6.5-4.4-11.7-11.2-11.7zm105.9 26.1c0 .3 .3 .5 .3 1.1 0 .3-.3 .5-.3 1.1-.3 .3-.3 .5-.5 .8-.3 .3-.5 .5-1.1 .5-.3 .3-.5 .3-1.1 .3-.3 0-.5 0-1.1-.3-.3 0-.5-.3-.8-.5-.3-.3-.5-.5-.5-.8-.3-.5-.3-.8-.3-1.1 0-.5 0-.8 .3-1.1 0-.5 .3-.8 .5-1.1 .3-.3 .5-.3 .8-.5 .5-.3 .8-.3 1.1-.3 .5 0 .8 0 1.1 .3 .5 .3 .8 .3 1.1 .5s.2 .6 .5 1.1zm-2.2 1.4c.5 0 .5-.3 .8-.3 .3-.3 .3-.5 .3-.8s0-.5-.3-.8c-.3 0-.5-.3-1.1-.3l-1.6 0 0 3.5 .8 0 0-1.4 .3 0 1.1 1.4 .8 0-1.1-1.3zM576 81l0 352c0 26.5-21.5 48-48 48L48 481c-26.5 0-48-21.5-48-48L0 81C0 54.5 21.5 33 48 33l480 0c26.5 0 48 21.5 48 48zM64 220.6c0 76.5 62.1 138.5 138.5 138.5 27.2 0 53.9-8.2 76.5-23.1-72.9-59.3-72.4-171.2 0-230.5-22.6-15-49.3-23.1-76.5-23.1-76.4-.1-138.5 62-138.5 138.2zM288 329.4c70.5-55 70.2-162.2 0-217.5-70.2 55.3-70.5 162.6 0 217.5zM145.7 405.7c0-8.7-5.7-14.4-14.7-14.7-4.6 0-9.5 1.4-12.8 6.5-2.4-4.1-6.5-6.5-12.2-6.5-3.8 0-7.6 1.4-10.6 5.4l0-4.4-8.2 0 0 36.7 8.2 0c0-18.9-2.5-30.2 9-30.2 10.2 0 8.2 10.2 8.2 30.2l7.9 0c0-18.3-2.5-30.2 9-30.2 10.2 0 8.2 10 8.2 30.2l8.2 0 0-23-.2 0zM190.6 392l-7.9 0 0 4.4c-2.7-3.3-6.5-5.4-11.7-5.4-10.3 0-18.2 8.2-18.2 19.3 0 11.2 7.9 19.3 18.2 19.3 5.2 0 9-1.9 11.7-5.4l0 4.6 7.9 0 0-36.8zm40.5 25.6c0-15-22.9-8.2-22.9-15.2 0-5.7 11.9-4.8 18.5-1.1l3.3-6.5c-9.4-6.1-30.2-6-30.2 8.2 0 14.3 22.9 8.3 22.9 15 0 6.3-13.5 5.8-20.7 .8l-3.5 6.3c11.2 7.6 32.6 6 32.6-7.5zm35.4 9.3l-2.2-6.8c-3.8 2.1-12.2 4.4-12.2-4.1l0-16.6 13.1 0 0-7.4-13.1 0 0-11.2-8.2 0 0 11.2-7.6 0 0 7.3 7.6 0 0 16.7c0 17.6 17.3 14.4 22.6 10.9zm13.3-13.4l27.5 0c0-16.2-7.4-22.6-17.4-22.6-10.6 0-18.2 7.9-18.2 19.3 0 20.5 22.6 23.9 33.8 14.2l-3.8-6c-7.8 6.4-19.6 5.8-21.9-4.9zM338.9 392c-4.6-2-11.6-1.8-15.2 4.4l0-4.4-8.2 0 0 36.7 8.2 0 0-20.7c0-11.6 9.5-10.1 12.8-8.4l2.4-7.6zm10.6 18.3c0-11.4 11.6-15.1 20.7-8.4l3.8-6.5c-11.6-9.1-32.7-4.1-32.7 15 0 19.8 22.4 23.8 32.7 15l-3.8-6.5c-9.2 6.5-20.7 2.6-20.7-8.6zM416.2 392l-8.2 0 0 4.4c-8.3-11-29.9-4.8-29.9 13.9 0 19.2 22.4 24.7 29.9 13.9l0 4.6 8.2 0 0-36.8zm33.7 0c-2.4-1.2-11-2.9-15.2 4.4l0-4.4-7.9 0 0 36.7 7.9 0 0-20.7c0-11 9-10.3 12.8-8.4l2.4-7.6zm40.3-14.9l-7.9 0 0 19.3c-8.2-10.9-29.9-5.1-29.9 13.9 0 19.4 22.5 24.6 29.9 13.9l0 4.6 7.9 0 0-51.7zm7.6-75.1l0 4.6 .8 0 0-4.6 1.9 0 0-.8-4.6 0 0 .8 1.9 0zm6.6 123.8c0-.5 0-1.1-.3-1.6-.3-.3-.5-.8-.8-1.1s-.8-.5-1.1-.8c-.5 0-1.1-.3-1.6-.3-.3 0-.8 .3-1.4 .3-.5 .3-.8 .5-1.1 .8-.5 .3-.8 .8-.8 1.1-.3 .5-.3 1.1-.3 1.6 0 .3 0 .8 .3 1.4 0 .3 .3 .8 .8 1.1 .3 .3 .5 .5 1.1 .8 .5 .3 1.1 .3 1.4 .3 .5 0 1.1 0 1.6-.3 .3-.3 .8-.5 1.1-.8s.5-.8 .8-1.1c.3-.6 .3-1.1 .3-1.4zm3.2-124.7l-1.4 0-1.6 3.5-1.6-3.5-1.4 0 0 5.4 .8 0 0-4.1 1.6 3.5 1.1 0 1.4-3.5 0 4.1 1.1 0 0-5.4zm4.4-80.5c0-76.2-62.1-138.3-138.5-138.3-27.2 0-53.9 8.2-76.5 23.1 72.1 59.3 73.2 171.5 0 230.5 22.6 15 49.5 23.1 76.5 23.1 76.4 .1 138.5-61.9 138.5-138.4z"},"paypal":{"vb":"0 0 384 512","d":"M111.9 295.9c-3.5 19.2-17.4 108.7-21.5 134-.3 1.8-1 2.5-3 2.5l-74.6 0c-7.6 0-13.1-6.6-12.1-13.9L59.3 46.6c1.5-9.6 10.1-16.9 20-16.9 152.3 0 165.1-3.7 204 11.4 60.1 23.3 65.6 79.5 44 140.3-21.5 62.6-72.5 89.5-140.1 90.3-43.4 .7-69.5-7-75.3 24.2zM357.6 152c-1.8-1.3-2.5-1.8-3 1.3-2 11.4-5.1 22.5-8.8 33.6-39.9 113.8-150.5 103.9-204.5 103.9-6.1 0-10.1 3.3-10.9 9.4-22.6 140.4-27.1 169.7-27.1 169.7-1 7.1 3.5 12.9 10.6 12.9l63.5 0c8.6 0 15.7-6.3 17.4-14.9 .7-5.4-1.1 6.1 14.4-91.3 4.6-22 14.3-19.7 29.3-19.7 71 0 126.4-28.8 142.9-112.3 6.5-34.8 4.6-71.4-23.8-92.6z"},"cashapp":{"vb":"0 0 448 512","d":"M440.3 96.9c-9.4-26.5-30.3-47.4-56.8-57-24.1-7.9-46.3-7.9-91.6-7.9L156 32c-44.8 0-67.2 0-91.3 7.5-26.5 9.6-47.4 30.5-57 57-7.7 24.3-7.7 46.7-7.7 91.7L0 323.8c0 45.2 0 67.4 7.5 91.5 9.6 26.5 30.5 47.4 57 57 24.3 7.7 46.7 7.7 91.6 7.7l135.7 0c45 0 67.4 0 91.6-7.7 26.5-9.6 47.4-30.5 57-57 7.7-24.3 7.7-46.7 7.7-91.5l0-135.5c0-45 0-67.4-7.7-91.5zM323.1 185.4l-25.8 21.1c-2.3 1.9-5.5 1.5-7.3-.9-13.2-16.2-33.7-25.4-56.1-25.4-25 0-40.6 10.9-40.6 26.2-.4 12.8 11.7 19.6 49.1 27.7 47.2 10 68.7 29.7 68.7 62.7 0 41.4-33.7 71.9-86.4 75.3l-5.1 24.5c-.4 2.3-2.6 4.1-5.1 4.1l-40.6 0c-3.4 0-5.8-3.2-5.1-6.4l6.4-27.3c-26-7.5-47.2-22-59.3-39.7-1.5-2.3-1.1-5.3 1.1-7l28.2-22c2.3-1.9 5.8-1.3 7.5 1.1 14.9 20.9 38 33.3 65.7 33.3 25 0 43.8-12.2 43.8-29.7 0-13.4-9.4-19.6-41.2-26.2-54.2-11.7-75.8-31.8-75.8-64.9 0-38.4 32.2-67.2 80.9-71l5.3-25.4c.4-2.3 2.6-4.1 5.1-4.1l39.9 0c3.2 0 5.8 3 5.1 6.2l-6.2 28.4c20.9 6.4 38 17.9 48.7 32.2 1.7 2.1 1.3 5.3-.9 7z"},"venmo":{"vb":"0 0 640 512","d":"M67.8 202.7c2.4 5 3.9 11 3.9 19.8 0 16.2-11.5 39.8-20.7 54.9l-9.9-79.7-41 3.9 18.8 112 46.9 0c20.5-26.9 45.8-65.3 45.8-94.8 0-9.3-1.9-16.6-6.3-23.7l-37.4 7.5zm113-7.1c-42.8 0-63.5 37-63.5 71.9 0 26.9 12.8 48.5 48.4 48.5 14 0 28.5-3 37.8-7.5l5-33.6c-13.2 6.7-23.3 9.3-33.9 9.3-9.7 0-17.1-5.2-17.1-18.3 22-.2 60-9.3 60-38.8 0-18.3-13.2-31.5-36.7-31.5l0 0zm-22.5 48.9c1.1-12.9 11-22 18.6-22 4.3 0 8 2.6 8 7.7 0 10.8-19 14.2-26.6 14.2l0 0zm150.2-48.9c-15.3 0-26.1 5.8-34.3 11.2l-.4-9.3-34.8 0-18.4 116.1 40.2 0 12.7-81.4c3.5-1.7 8.6-4.1 13.8-4.1 3.9 0 7.1 1.3 7.1 6.5 0 2.2-.7 6-.9 8l-11.2 71.1 40 0 12.3-77.5c.7-4.1 1.3-10.3 1.3-14.6 0-15.5-7.1-25.9-27.4-25.9zm183.2 0c-14.9 0-25.7 4.5-37.2 12.7-4.1-7.3-12.3-12.7-24.8-12.7-14.5 0-25.3 5.8-33.3 11.6l-1.1-9.7-34.4 0-18.4 116.1 40.2 0 12.8-81.4c3.5-1.7 8.6-4.1 13.8-4.1 3.9 0 7.1 1.3 7.1 7.1 0 1.5-.4 3.9-.6 5.8l-11.4 72.6 40 0 12.7-81.4c3.7-1.9 8.6-4.1 13.6-4.1 3.9 0 7.1 1.3 7.1 7.1 0 1.5-.4 3.9-.7 5.8l-11.4 72.6 40 0 12.3-77.5c.7-4.1 1.3-10.3 1.3-14.6 0-15.5-7.1-25.9-27.7-25.9l0 0zm102.2 0c-44.7 0-64.2 34.3-64.2 70.9 0 27.8 11.2 50 45.1 50 45.8 0 65-37.5 65-73.7 0-27.4-12.3-47.2-46-47.2zm-13.4 90c-7.1 0-10.1-6.7-10.1-17.5 0-14.2 3.2-42 19-42 7.1 0 9.5 6.5 9.5 15.9 0 14.2-3.5 43.5-18.4 43.5z"},"globe":{"vb":"0 0 512 512","d":"M351.9 280l-190.9 0c2.9 64.5 17.2 123.9 37.5 167.4 11.4 24.5 23.7 41.8 35.1 52.4 11.2 10.5 18.9 12.2 22.9 12.2s11.7-1.7 22.9-12.2c11.4-10.6 23.7-28 35.1-52.4 20.3-43.5 34.6-102.9 37.5-167.4zM160.9 232l190.9 0C349 167.5 334.7 108.1 314.4 64.6 303 40.2 290.7 22.8 279.3 12.2 268.1 1.7 260.4 0 256.4 0s-11.7 1.7-22.9 12.2c-11.4 10.6-23.7 28-35.1 52.4-20.3 43.5-34.6 102.9-37.5 167.4zm-48 0C116.4 146.4 138.5 66.9 170.8 14.7 78.7 47.3 10.9 131.2 1.5 232l111.4 0zM1.5 280c9.4 100.8 77.2 184.7 169.3 217.3-32.3-52.2-54.4-131.7-57.9-217.3L1.5 280zm398.4 0c-3.5 85.6-25.6 165.1-57.9 217.3 92.1-32.7 159.9-116.5 169.3-217.3l-111.4 0zm111.4-48C501.9 131.2 434.1 47.3 342 14.7 374.3 66.9 396.4 146.4 399.9 232l111.4 0z"},"grid":{"vb":"0 0 448 512","d":"M384 96l0 64-64 0 0-64 64 0zm0 128l0 64-64 0 0-64 64 0zm0 128l0 64-64 0 0-64 64 0zM256 288l-64 0 0-64 64 0 0 64zm-64 64l64 0 0 64-64 0 0-64zm-64-64l-64 0 0-64 64 0 0 64zM64 352l64 0 0 64-64 0 0-64zm0-192l0-64 64 0 0 64-64 0zm128 0l0-64 64 0 0 64-64 0zM64 32C28.7 32 0 60.7 0 96L0 416c0 35.3 28.7 64 64 64l320 0c35.3 0 64-28.7 64-64l0-320c0-35.3-28.7-64-64-64L64 32z"},"feed":{"vb":"0 0 512 512","d":"M40 48C26.7 48 16 58.7 16 72l0 48c0 13.3 10.7 24 24 24l48 0c13.3 0 24-10.7 24-24l0-48c0-13.3-10.7-24-24-24L40 48zM192 64c-17.7 0-32 14.3-32 32s14.3 32 32 32l288 0c17.7 0 32-14.3 32-32s-14.3-32-32-32L192 64zm0 160c-17.7 0-32 14.3-32 32s14.3 32 32 32l288 0c17.7 0 32-14.3 32-32s-14.3-32-32-32l-288 0zm0 160c-17.7 0-32 14.3-32 32s14.3 32 32 32l288 0c17.7 0 32-14.3 32-32s-14.3-32-32-32l-288 0zM16 232l0 48c0 13.3 10.7 24 24 24l48 0c13.3 0 24-10.7 24-24l0-48c0-13.3-10.7-24-24-24l-48 0c-13.3 0-24 10.7-24 24zM40 368c-13.3 0-24 10.7-24 24l0 48c0 13.3 10.7 24 24 24l48 0c13.3 0 24-10.7 24-24l0-48c0-13.3-10.7-24-24-24l-48 0z"}};
+function Icon({ name, size = 18, color }) {
+  const i = ICON_PATHS[name];
+  if (!i) return null;
+  return <svg viewBox={i.vb} width={size} height={size} fill="currentColor" aria-hidden="true" style={{ color, flexShrink: 0 }}><path d={i.d} /></svg>;
+}
+const SOCIAL_STYLE = {
+  instagram: { color: '#FFFFFF', bg: 'linear-gradient(45deg,#F9A825,#E1306C 55%,#833AB4)' },
+  tiktok: { color: '#FFFFFF', bg: '#000000' },
+  facebook: { color: '#FFFFFF', bg: '#1877F2' },
+  youtube: { color: '#FFFFFF', bg: '#FF0000' },
+  website: { color: '#FFFFFF', bg: '#4B5573' },
+};
 function SocialLinks({ links }) {
   const items = SOCIAL_FIELDS.filter(f => links?.[f.k]);
   if (!items.length) return null;
   return (
-    <div className="flex flex-wrap justify-center gap-2 mt-3">
-      {items.map(f => (
-        <a key={f.k} href={links[f.k]} target="_blank" rel="noopener noreferrer nofollow" style={{ background: C.surface, color: C.paper, border: `1px solid ${C.surface2}` }} className="text-xs font-bold px-3 py-1.5 rounded-full flex items-center gap-1">{f.icon} {f.label}</a>
-      ))}
+    <div className="mt-4 w-full">
+      <div style={{ color: C.muted }} className="text-[10px] font-bold uppercase tracking-wide text-center mb-2">Socials</div>
+      <div className="flex flex-wrap justify-center gap-4">
+        {items.map(f => {
+          const st = SOCIAL_STYLE[f.k];
+          return (
+            <a key={f.k} href={links[f.k]} target="_blank" rel="noopener noreferrer nofollow" aria-label={`Open ${f.label}`} className="flex flex-col items-center gap-1">
+              <span style={{ background: st.bg, color: st.color, width: 46, height: 46 }} className="rounded-full flex items-center justify-center"><Icon name={f.k === 'website' ? 'globe' : f.k} size={22} /></span>
+              <span style={{ color: C.muted }} className="text-[10px] font-semibold">{f.label}</span>
+            </a>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -1321,7 +1358,7 @@ function EditProfileScreen({ user, onCancel, onSaved, onToast }) {
   const [location, setLocation] = useState(user.location || '');
   const [showLocation, setShowLocation] = useState(!!user.showLocation);
   const [interests, setInterests] = useState(user.interests || []);
-  const [links, setLinks] = useState({ instagram: '', tiktok: '', facebook: '', youtube: '', website: '', ...(user.links || {}) });
+  const [links, setLinks] = useState(() => { const o = {}; for (const f of SOCIAL_FIELDS) o[f.k] = linkToInput(f, (user.links || {})[f.k] || ''); return o; });
   const [emoji, setEmoji] = useState(user.avatar || '😎');
   const [photo, setPhoto] = useState(null); // { blob, preview } — chosen but NOT saved until Save Changes
   const [removePhoto, setRemovePhoto] = useState(false);
@@ -1426,13 +1463,22 @@ function EditProfileScreen({ user, onCancel, onSaved, onToast }) {
         <div style={{ color: C.muted }} className="text-[11px] mt-1">These also personalize your For You feed.</div>
 
         <Label>Social links <span style={{ color: C.muted }} className="font-normal">(optional)</span></Label>
-        <div className="flex flex-col gap-2.5">
-          {SOCIAL_FIELDS.map(f => (
-            <div key={f.k}>
-              <input value={links[f.k]} onChange={e => setLinks({ ...links, [f.k]: e.target.value })} placeholder={`${f.icon} ${f.label}: ${f.ph}`} autoCapitalize="none" autoCorrect="off" inputMode="url" style={fieldBox} className="w-full rounded-lg px-4 py-3.5 outline-none" />
-              {errors.links?.[f.k] && <div style={{ color: C.red }} className="text-xs mt-1">{errors.links[f.k]}</div>}
-            </div>
-          ))}
+        <div style={{ color: C.muted }} className="text-[11px] -mt-1 mb-2.5">Just type your username — KRUSH builds the link for you. Leave blank to hide.</div>
+        <div className="flex flex-col gap-3.5">
+          {SOCIAL_FIELDS.map(f => {
+            const r = normalizeLink(f, links[f.k]); const typed = (links[f.k] || '').trim();
+            return (
+              <div key={f.k}>
+                <div className="flex items-center gap-2">
+                  <span style={{ background: SOCIAL_STYLE[f.k].bg, color: '#fff', width: 40, height: 40 }} className="rounded-full flex items-center justify-center flex-shrink-0"><Icon name={f.k === 'website' ? 'globe' : f.k} size={18} /></span>
+                  <input value={links[f.k]} onChange={e => setLinks({ ...links, [f.k]: e.target.value })} placeholder={f.ph} autoCapitalize="none" autoCorrect="off" aria-label={f.label} style={fieldBox} className="flex-1 min-w-0 rounded-lg px-4 py-3.5 outline-none" />
+                </div>
+                {typed && r.error && <div style={{ color: C.red }} className="text-xs mt-1 ml-12">{r.error}</div>}
+                {typed && !r.error && r.value && <div style={{ color: C.green }} className="text-[10px] mt-1 ml-12 break-all">✓ Opens {r.value}</div>}
+                <div style={{ color: C.muted }} className="text-[10px] mt-0.5 ml-12">{f.help}</div>
+              </div>
+            );
+          })}
         </div>
 
         <div style={{ background: C.surface, border: `1px solid ${C.surface2}` }} className="rounded-xl p-4 mt-6">
@@ -1465,25 +1511,10 @@ function EditProfileScreen({ user, onCancel, onSaved, onToast }) {
 
 // Public view of someone else's (or your own) profile. Only explicitly public fields are rendered —
 // never email, birthdate, wallet, or settings.
-function PublicProfileScreen({ accountId, viewerId, onClose }) {
+function PublicProfileScreen({ accountId, viewer, onToast, onClose }) {
   const [p, setP] = useState(undefined); // undefined = loading, null = no profile
-  const [stats, setStats] = useState(null);
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      const prof = await getProfile(accountId, true);
-      if (!alive) return; setP(prof);
-      if (!prof) return;
-      let entries = [], contents = [], comps = [];
-      try { entries = (await sGetMany(await sList('entry:', true), true)).filter(e => e.username === accountId); } catch {}
-      try { contents = (await sGetMany(await sList('content:', true), true)).filter(c => c.username === accountId); } catch {}
-      try { comps = await sGetMany(await sList('comp:', true), true); } catch {}
-      const ids = new Set(entries.map(e => e.id));
-      const wins = comps.filter(c => c.status === 'ended' && c.winnerEntryId && ids.has(c.winnerEntryId)).length;
-      if (alive) setStats({ wins, entries: entries.length, uploads: contents.length });
-    })();
-    return () => { alive = false; };
-  }, [accountId]);
+  const data = useProfileData(accountId);
+  useEffect(() => { let alive = true; getProfile(accountId, true).then(x => { if (alive) setP(x); }); return () => { alive = false; }; }, [accountId]);
   return (
     <div className="fixed inset-0 overflow-y-auto" style={{ background: C.ink, zIndex: 90 }}>
       <div className="max-w-md mx-auto pb-10">
@@ -1492,21 +1523,576 @@ function PublicProfileScreen({ accountId, viewerId, onClose }) {
           <div className="px-4 pt-5 flex flex-col items-center text-center">
             <Avatar profile={p} size={96} gradient />
             <div style={{ color: C.paper }} className="font-black text-xl mt-3">{p.displayName || handleOf(p)}</div>
-            <div style={{ color: C.muted }} className="text-sm">@{handleOf(p)}{viewerId === accountId && <span> (you)</span>}</div>
+            <div style={{ color: C.muted }} className="text-sm">@{handleOf(p)}{viewer?.username === accountId && <span> (you)</span>}</div>
             {p.bio && <div style={{ color: C.paper }} className="text-sm mt-2 max-w-xs whitespace-pre-wrap">{p.bio}</div>}
             {p.showLocation && p.location && <div style={{ color: C.muted }} className="text-xs mt-2">📍 {p.location}</div>}
             <InterestChips interests={p.interests} />
             <SocialLinks links={p.links} />
-            {stats && (
-              <div className="flex gap-6 mt-5">
-                <Stat label="Wins" value={stats.wins} color={C.amber} />
-                <Stat label="Entries" value={stats.entries} color={C.pink} />
-                <Stat label="Uploads" value={stats.uploads} color={C.blue} />
-              </div>
-            )}
+            <ProfileStatsRow data={data} />
+            <ProfileTabs accountId={accountId} profile={p} data={data} viewer={viewer} onToast={onToast} />
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// ---------- PROFILE STATS, COMPETITION HISTORY, GRID / FEED ----------
+// Everything here is calculated from the real records: entry:*, content:*, comp:* and vote totals.
+// WIN  = the competition has ended AND its official winner (comp.winnerEntryId) is this user's entry.
+// LOSS = the competition has ended and the user's entry was not the official winner.
+// Active competitions are "In Progress" (never a loss); canceled competitions are never counted.
+const MIN_COMPLETED_FOR_WIN_RATE = 3;
+const videoThumb = (url) => (typeof url === 'string' && url.includes('/video/upload/'))
+  ? url.replace('/video/upload/', '/video/upload/so_0,c_fill,w_400,h_400,q_auto/').replace(/\.[a-z0-9]{2,4}(\?.*)?$/i, '.jpg')
+  : null;
+const fmtDate = (ms) => ms ? new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '';
+async function buildProfileData(accountId) {
+  let entries = [], contents = [], storedComps = [];
+  try { entries = (await sGetMany(await sList('entry:', true), true)).filter(e => e.username === accountId); } catch {}
+  try { contents = (await sGetMany(await sList('content:', true), true)).filter(c => c.username === accountId); } catch {}
+  try { storedComps = await sGetMany(await sList('comp:', true), true); } catch {}
+  const compMap = Object.fromEntries(buildMockComps().map(c => [c.id, c]));
+  for (const c of storedComps) compMap[c.id] = c;
+  const contentById = Object.fromEntries(contents.map(c => [c.id, c]));
+  const rankCache = {};
+  const rankFor = async (comp, entry) => {
+    if (!rankCache[comp.id]) {
+      const eff = await getEffectiveEntries(comp.id);
+      const totals = {};
+      for (const e of eff) totals[e.id] = await getVoteTotal(comp.id, e.id, e.baseVotes || 0);
+      const ranked = [...eff].sort((a, b) => (totals[b.id] || 0) - (totals[a.id] || 0));
+      const pot = eff.reduce((s, e) => s + (typeof e.feePaid === 'number' ? e.feePaid : ENTRY_FEE_STANDARD), 0);
+      rankCache[comp.id] = { ranked, totals, pot, count: eff.length };
+    }
+    const r = rankCache[comp.id];
+    return { rank: r.ranked.findIndex(e => e.id === entry.id) + 1, of: r.count, votes: r.totals[entry.id] || 0, pot: r.pot };
+  };
+  const items = [];
+  for (const entry of [...entries].sort((a, b) => (b.enteredAt || 0) - (a.enteredAt || 0))) {
+    const comp = compMap[entry.compId];
+    if (!comp) continue;
+    const content = contentById[entry.contentId] || (await sGet(`content:${entry.contentId}`, true)) || null;
+    const { rank, of, votes, pot } = await rankFor(comp, entry);
+    const cancelled = /cancel/i.test(comp.status || '');
+    const ended = comp.status === 'ended';
+    const result = cancelled ? 'cancelled' : ended ? (comp.winnerEntryId === entry.id ? 'win' : 'loss') : 'progress';
+    items.push({ entry, content, comp, rank, of, votes, pot, result, at: comp.endedAt || entry.enteredAt });
+  }
+  const wins = items.filter(i => i.result === 'win').length;
+  const losses = items.filter(i => i.result === 'loss').length;
+  const completed = wins + losses;
+  const infoByContent = Object.fromEntries(items.filter(i => i.content).map(i => [i.content.id, i]));
+  const uploads = [...contents].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).map(c => ({ content: c, info: infoByContent[c.id] || null }));
+  return {
+    items, uploads,
+    stats: { wins, losses, completed, entries: items.filter(i => i.result !== 'cancelled').length, uploads: contents.length, winRate: completed >= MIN_COMPLETED_FOR_WIN_RATE ? Math.round((wins / completed) * 100) : null },
+  };
+}
+function useProfileData(accountId) {
+  const [data, setData] = useState(null);
+  useEffect(() => {
+    let alive = true; setData(null);
+    buildProfileData(accountId).then(d => { if (alive) setData(d); }).catch(() => { if (alive) setData({ items: [], uploads: [], stats: { wins: 0, losses: 0, completed: 0, entries: 0, uploads: 0, winRate: null } }); });
+    return () => { alive = false; };
+  }, [accountId]);
+  return data;
+}
+function ProfileStatsRow({ data }) {
+  const s = data?.stats; const v = (n) => (s ? n : '–');
+  return (
+    <div className="flex flex-wrap justify-center gap-x-5 gap-y-2 mt-4">
+      <Stat label="Wins" value={v(s?.wins)} color={C.amber} />
+      <Stat label="Losses" value={v(s?.losses)} color={C.red} />
+      <Stat label="Entries" value={v(s?.entries)} color={C.pink} />
+      <Stat label="Uploads" value={v(s?.uploads)} color={C.blue} />
+      <Stat label="Win Rate" value={s ? (s.winRate === null ? '—' : `${s.winRate}%`) : '–'} color={C.green} />
+    </div>
+  );
+}
+// Auto-plays when mostly on screen, pauses when scrolled away; one video at a time. Same playback behavior as the competition feed.
+function AutoplayVideo({ url, muted, onSetMuted }) {
+  const boxRef = useRef(null), vidRef = useRef(null), mutedRef = useRef(muted), userPausedRef = useRef(false);
+  const [failed, setFailed] = useState(false); const [playing, setPlaying] = useState(false); const [buffering, setBuffering] = useState(false); const [progress, setProgress] = useState(0);
+  useEffect(() => { mutedRef.current = muted; if (vidRef.current) vidRef.current.muted = muted; }, [muted]);
+  useEffect(() => {
+    const box = boxRef.current, v = vidRef.current;
+    if (!box || !v || typeof IntersectionObserver === 'undefined') return undefined;
+    const start = () => {
+      v.muted = mutedRef.current; const p = v.play();
+      if (p && p.catch) p.catch(() => { if (!v.muted) { v.muted = true; onSetMuted && onSetMuted(true); const p2 = v.play(); if (p2 && p2.catch) p2.catch(() => setPlaying(false)); } else setPlaying(false); });
+    };
+    const io = new IntersectionObserver(([en]) => {
+      if (en.isIntersecting && en.intersectionRatio >= 0.6) { if (!userPausedRef.current) start(); }
+      else { v.pause(); userPausedRef.current = false; try { v.currentTime = 0; } catch {} }
+    }, { threshold: [0, 0.25, 0.6, 0.9] });
+    io.observe(box);
+    return () => { io.disconnect(); v.pause(); };
+  }, [url, failed]);
+  const onPlay = (ev) => { document.querySelectorAll('video[data-feedvid]').forEach(x => { if (x !== ev.currentTarget) x.pause(); }); };
+  const toggle = () => { const v = vidRef.current; if (!v) return; if (v.paused) { userPausedRef.current = false; v.muted = mutedRef.current; const p = v.play(); if (p && p.catch) p.catch(() => setPlaying(false)); } else { userPausedRef.current = true; v.pause(); } };
+  if (failed) return (
+    <div style={{ background: '#000', color: C.muted }} className="w-full aspect-video flex flex-col items-center justify-center gap-2">
+      <span className="text-3xl">⚠️</span><span className="text-xs px-8 text-center">This video couldn't be played. Check your connection and try again.</span>
+      <button onClick={() => setFailed(false)} style={{ background: C.surface2, color: C.paper }} className="px-4 py-2 rounded-lg text-xs font-bold">Retry</button>
+    </div>
+  );
+  return (
+    <div ref={boxRef} onClick={toggle} className="relative w-full flex items-center justify-center" style={{ background: '#000', minHeight: 240 }}>
+      <video ref={vidRef} data-feedvid="1" src={`${url}#t=0.1`} loop muted={muted} playsInline preload="metadata"
+        onPlay={onPlay} onPlaying={() => { setPlaying(true); setBuffering(false); }} onPause={() => setPlaying(false)} onWaiting={() => setBuffering(true)} onCanPlay={() => setBuffering(false)}
+        onTimeUpdate={(e) => { const d = e.currentTarget.duration; if (d && isFinite(d)) setProgress(e.currentTarget.currentTime / d); }} onError={() => setFailed(true)}
+        className="w-full block" style={{ maxHeight: '78vh', objectFit: 'contain', background: '#000' }} />
+      {buffering && <div className="absolute inset-0 flex items-center justify-center pointer-events-none"><div className="w-8 h-8 rounded-full border-2 animate-spin" style={{ borderColor: 'rgba(255,255,255,0.3)', borderTopColor: 'white' }} /></div>}
+      {!playing && !buffering && <div className="absolute inset-0 flex items-center justify-center pointer-events-none"><span style={{ background: 'rgba(0,0,0,0.5)', color: 'white' }} className="w-16 h-16 rounded-full flex items-center justify-center text-3xl">▶</span></div>}
+      <button onClick={(e) => { e.stopPropagation(); onSetMuted && onSetMuted(!muted); }} aria-label={muted ? 'Turn sound on' : 'Turn sound off'} style={{ background: 'rgba(0,0,0,0.6)', color: 'white' }} className="absolute top-2 right-2 h-9 px-3 rounded-full text-xs font-bold flex items-center">{muted ? '🔇 Tap for sound' : '🔊'}</button>
+      <div className="absolute left-0 right-0 bottom-0 h-1" style={{ background: 'rgba(255,255,255,0.15)' }}><div style={{ width: `${Math.round(progress * 100)}%`, background: C.pink }} className="h-full" /></div>
+    </div>
+  );
+}
+const RESULT_STYLE = { win: { label: '🏆 WIN', color: C.amber, bg: 'rgba(255,176,32,0.15)' }, loss: { label: 'LOSS', color: C.red, bg: 'rgba(255,77,77,0.12)' }, progress: { label: 'IN PROGRESS', color: C.blue, bg: 'rgba(46,91,255,0.15)' }, cancelled: { label: 'CANCELED', color: C.muted, bg: C.surface2 } };
+const rankLine = (i) => i.result === 'progress' ? `Current Rank: #${i.rank} of ${i.of}` : `Final Rank: #${i.rank} of ${i.of}`;
+function ProfileFeedPost({ profile, accountId, upload, focus, muted, onSetMuted, onComment, onShare, refreshTick }) {
+  const { content, info } = upload;
+  const targetId = info ? info.entry.id : content.id;
+  const [n, setN] = useState(0);
+  useEffect(() => { countTopLevelComments(targetId).then(setN); }, [targetId, refreshTick]);
+  const ref = useRef(null);
+  useEffect(() => { if (focus && focus.id === content.id && ref.current) ref.current.scrollIntoView({ block: 'start', behavior: 'smooth' }); }, [focus]);
+  const rs = info ? RESULT_STYLE[info.result] : null;
+  return (
+    <div ref={ref} style={{ background: C.surface }} className="rounded-2xl overflow-hidden">
+      <div className="flex items-center gap-2 px-3 pt-3 pb-2">
+        <Avatar profile={profile} size={36} />
+        <span className="min-w-0"><span style={{ color: C.paper }} className="block text-sm font-bold truncate">{profile?.displayName || `@${accountId}`}</span>{profile?.displayName && <span style={{ color: C.muted }} className="block text-xs truncate">@{handleOf(profile)}</span>}</span>
+        {rs && <span style={{ background: rs.bg, color: rs.color }} className="ml-auto text-[10px] font-bold px-2 py-1 rounded-md flex-shrink-0">{rs.label}</span>}
+      </div>
+      {(content.title || content.caption) && <div className="px-3 pb-2">{content.title && <div style={{ color: C.paper }} className="text-sm font-semibold">{content.title}</div>}{content.caption && <div style={{ color: C.paper }} className="text-sm">{content.caption}</div>}</div>}
+      {content.videoUrl ? <AutoplayVideo url={content.videoUrl} muted={muted} onSetMuted={onSetMuted} /> : (
+        <div style={{ background: `linear-gradient(135deg, ${C.surface2}, ${C.ink})`, color: C.muted }} className="w-full aspect-video flex flex-col items-center justify-center gap-2"><span className="text-5xl">{content.kind === 'photo' ? '🖼️' : '🎬'}</span><span className="text-xs">No video attached</span></div>
+      )}
+      <div className="p-3">
+        {info && (
+          <div className="flex items-center justify-between mb-2.5">
+            <span style={{ color: C.amber }} className="text-xs font-black uppercase tracking-wide">🏆 {rankLine(info)}</span>
+            <span style={{ color: C.paper }} className="text-xs font-black uppercase">❤️ {info.votes} vote{info.votes === 1 ? '' : 's'}</span>
+          </div>
+        )}
+        {info && <div style={{ color: C.muted }} className="text-[11px] mb-2.5">{CAT_EMOJI[info.comp.category]} {info.comp.title}</div>}
+        <div className="flex items-center gap-2">
+          <button onClick={() => onComment({ id: targetId, username: accountId })} style={{ background: C.surface2, color: C.paper }} className="flex-1 py-3 rounded-lg text-xs font-bold flex items-center justify-center gap-1">💬 {n}</button>
+          <button onClick={() => onShare({ id: targetId, username: accountId, caption: content.caption || '', compTitle: info?.comp.title })} style={{ background: C.surface2, color: C.paper }} className="flex-1 py-3 rounded-lg text-xs font-bold">↗ Share</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+function HistoryCard({ item, onWatch, onOpenComp }) {
+  const rs = RESULT_STYLE[item.result];
+  const thumb = videoThumb(item.content?.videoUrl);
+  return (
+    <div style={{ background: C.surface }} className="rounded-xl p-3">
+      <div className="flex gap-3">
+        <div style={{ background: C.surface2, width: 72, height: 96 }} className="rounded-lg overflow-hidden flex-shrink-0 flex items-center justify-center">
+          {thumb ? <img src={thumb} alt="" className="w-full h-full object-cover" /> : <span className="text-2xl">🎬</span>}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0"><div style={{ color: C.paper }} className="text-sm font-bold">{CAT_EMOJI[item.comp.category]} {item.comp.title}</div><div style={{ color: C.muted }} className="text-[11px]">{item.comp.category} · {fmtDate(item.at)}</div></div>
+            <span style={{ background: rs.bg, color: rs.color }} className="text-[10px] font-bold px-2 py-1 rounded-md flex-shrink-0">{rs.label}</span>
+          </div>
+          <div style={{ color: C.paper }} className="text-xs font-semibold mt-1.5">{item.result === 'cancelled' ? 'Competition canceled' : rankLine(item)}</div>
+          <div style={{ color: C.muted }} className="text-xs">Votes received: <b style={{ color: C.paper }}>{item.votes}</b> · {item.of} competitor{item.of === 1 ? '' : 's'}</div>
+          {item.result === 'win' && <div style={{ color: C.amber }} className="text-xs font-bold mt-0.5">Demo prize: {item.pot} tokens</div>}
+          <div className="flex gap-2 mt-2">
+            {item.content?.videoUrl && <button onClick={() => onWatch(item)} style={{ background: C.blue, color: 'white' }} className="text-[11px] font-bold px-3 py-1.5 rounded-lg">▶ Watch Entry</button>}
+            {onOpenComp && <button onClick={() => onOpenComp(item.comp, null)} style={{ background: C.surface2, color: C.paper }} className="text-[11px] font-bold px-3 py-1.5 rounded-lg">Competition &gt;</button>}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+function ProfileTabs({ accountId, profile, data, viewer, onToast, onOpenComp }) {
+  const [tab, setTab] = useState('uploads');
+  const [view, setView] = useState('grid');
+  const [focus, setFocus] = useState(null);
+  const [muted, setMuted] = useState(true);
+  const [commentsFor, setCommentsFor] = useState(null);
+  const [shareFor, setShareFor] = useState(null);
+  const [tick, setTick] = useState(0);
+  const [reposts, setReposts] = useState([]);
+  useEffect(() => {
+    let alive = true;
+    (async () => { let all = []; try { all = await sGetMany(await sList('repost:', true), true); } catch { all = []; } if (alive) setReposts(all.filter(r => r.repostedBy === accountId).sort((a, b) => b.at - a.at)); })();
+    return () => { alive = false; };
+  }, [accountId]);
+  const watch = (item) => { if (!item.content) return; setTab('uploads'); setView('feed'); setFocus({ id: item.content.id, n: Date.now() }); };
+  const tabs = [['uploads', 'Uploads'], ['entries', 'Entries'], ['wins', 'Wins'], ['history', 'History'], ['reposts', 'Reposts']];
+  const items = data?.items || [];
+  const list = tab === 'wins' ? items.filter(i => i.result === 'win') : tab === 'history' ? items.filter(i => i.result === 'win' || i.result === 'loss') : items.filter(i => i.result !== 'cancelled');
+  return (
+    <div className="w-full mt-6">
+      <div style={{ background: C.surface }} className="flex rounded-xl p-1 w-full">
+        {tabs.map(([k, label]) => <button key={k} onClick={() => setTab(k)} style={{ background: tab === k ? C.blue : 'transparent', color: tab === k ? 'white' : C.muted }} className="flex-1 text-[11px] font-bold py-2 rounded-lg">{label}</button>)}
+      </div>
+      <div className="w-full mt-4">
+        {!data ? <Spinner /> : tab === 'uploads' ? (
+          <>
+            <div className="flex items-center justify-end gap-2 mb-3">
+              <button onClick={() => setView('grid')} aria-label="Grid view" style={{ background: view === 'grid' ? C.blue : C.surface, color: view === 'grid' ? 'white' : C.muted }} className="w-10 h-9 rounded-lg flex items-center justify-center"><Icon name="grid" size={16} /></button>
+              <button onClick={() => setView('feed')} aria-label="Feed view" style={{ background: view === 'feed' ? C.blue : C.surface, color: view === 'feed' ? 'white' : C.muted }} className="w-10 h-9 rounded-lg flex items-center justify-center"><Icon name="feed" size={16} /></button>
+            </div>
+            {data.uploads.length === 0 ? <EmptyState text="No uploads yet." /> : view === 'grid' ? (
+              <div className="grid grid-cols-3 gap-1">
+                {data.uploads.map(u => {
+                  const thumb = videoThumb(u.content.videoUrl);
+                  const badge = u.info ? (u.info.result === 'win' ? '🏆 WIN' : u.info.result === 'progress' ? `LIVE #${u.info.rank}` : `#${u.info.rank}`) : null;
+                  return (
+                    <button key={u.content.id} onClick={() => { setView('feed'); setFocus({ id: u.content.id, n: Date.now() }); }} aria-label="Watch video" style={{ background: C.surface2 }} className="relative aspect-square overflow-hidden">
+                      {thumb ? <img src={thumb} alt="" loading="lazy" className="w-full h-full object-cover" onError={(e) => { e.currentTarget.style.display = 'none'; }} /> : null}
+                      <span className="absolute inset-0 flex items-center justify-center text-2xl" style={{ color: 'rgba(255,255,255,0.85)', zIndex: 0 }}>{thumb ? '' : (u.content.kind === 'photo' ? '🖼️' : '🎬')}</span>
+                      {u.content.videoUrl && <span style={{ background: 'rgba(0,0,0,0.5)', color: 'white' }} className="absolute top-1 right-1 text-[10px] px-1.5 rounded">▶</span>}
+                      {badge && <span style={{ background: 'rgba(0,0,0,0.65)', color: u.info.result === 'win' ? C.amber : 'white' }} className="absolute bottom-1 left-1 text-[10px] font-bold px-1.5 py-0.5 rounded">{badge}</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="flex flex-col gap-4">
+                {data.uploads.map(u => <ProfileFeedPost key={u.content.id} profile={profile} accountId={accountId} upload={u} focus={focus} muted={muted} onSetMuted={setMuted} onComment={setCommentsFor} onShare={setShareFor} refreshTick={tick} />)}
+              </div>
+            )}
+          </>
+        ) : tab === 'reposts' ? (reposts.length === 0 ? <EmptyState text="Nothing reposted yet." /> : (
+          <div className="flex flex-col gap-2">{reposts.map(r => (
+            <div key={r.id} style={{ background: C.surface }} className="rounded-xl p-3">
+              <div style={{ color: C.muted }} className="text-[10px] mb-1.5"><Handle accountId={accountId} /> reposted</div>
+              <div style={{ background: C.surface2 }} className="rounded-lg p-2.5">
+                <div style={{ color: C.paper }} className="text-xs font-bold"><Handle accountId={r.originalUsername} />{r.compTitle ? ` · ${r.compTitle}` : ''}</div>
+                <div style={{ color: C.muted }} className="text-xs truncate">{r.originalCaption}</div>
+              </div>
+              {r.message && <div style={{ color: C.paper }} className="text-xs mt-1.5">{r.message}</div>}
+            </div>
+          ))}</div>
+        )) : (list.length === 0 ? <EmptyState text={tab === 'wins' ? 'No wins yet.' : tab === 'history' ? 'No completed competitions yet.' : 'No competitions entered yet.'} /> : (
+          <div className="flex flex-col gap-2.5">{list.map(i => <HistoryCard key={i.entry.id} item={i} onWatch={watch} onOpenComp={onOpenComp} />)}</div>
+        ))}
+      </div>
+      {commentsFor && <CommentsSheet targetId={commentsFor.id} targetLabel={`@${commentsFor.username}`} user={viewer} onClose={() => { setCommentsFor(null); setTick(t => t + 1); }} onToast={onToast} />}
+      {shareFor && <ShareSheet item={shareFor} user={viewer} onClose={() => setShareFor(null)} onToast={onToast} />}
+    </div>
+  );
+}
+
+// ---------- DEMO KRUSH WALLET ----------
+// DEMO ONLY: every token, balance and transaction is simulated. No real money, card, bank or payment data is
+// ever collected or moved. The balance is the SAME `wallet:{id}` record the app already used for entry fees and
+// winnings; every change now also writes a ledger line `wtx:{id}:{operation}` (that operation key makes a repeated
+// tap or retry harmless — the same operation can only be applied once, and a balance can never go below zero).
+// EASY-TO-CHANGE WALLET TEST SETTINGS (facilitators can also change these in Facilitator Tools):
+const WALLET_DEFAULT_CONFIG = { addTokensEnabled: true, withdrawalFeePct: 3, packages: [10, 25, 50, 100] };
+async function getWalletConfig() {
+  let stored = null; try { stored = await sGet('config:wallet', true); } catch { stored = null; }
+  const pct = Number(stored?.withdrawalFeePct);
+  return { ...WALLET_DEFAULT_CONFIG, addTokensEnabled: stored && typeof stored.addTokensEnabled === 'boolean' ? stored.addTokensEnabled : WALLET_DEFAULT_CONFIG.addTokensEnabled, withdrawalFeePct: isFinite(pct) && pct >= 0 && pct <= 50 ? pct : WALLET_DEFAULT_CONFIG.withdrawalFeePct };
+}
+const txRef = (op) => 'KR-' + String(op).replace(/[^a-z0-9]/gi, '').slice(-8).toUpperCase();
+async function applyWalletTx(accountId, { op, type, amount, note, compId, startBalance = 0, extra }) {
+  const key = `wtx:${accountId}:${op}`;
+  const existing = await sGet(key, true);
+  if (existing) return { ok: true, duplicate: true, tx: existing, balance: existing.balanceAfter };
+  const w = (await sGet(`wallet:${accountId}`, true)) || { balance: startBalance };
+  const bal = Number(w.balance) || 0;
+  const next = Math.round((bal + amount) * 100) / 100;
+  if (next < 0) return { ok: false, error: 'Not enough demo tokens for that.' };
+  await sSet(`wallet:${accountId}`, { ...w, balance: next }, true);
+  const tx = { id: op, accountId, type, amount, unit: 'tokens', balanceAfter: next, status: 'Completed', note: note || '', compId: compId || null, ref: txRef(op), at: Date.now(), ...(extra || {}) };
+  await sSet(key, tx, true);
+  return { ok: true, tx, balance: next };
+}
+// Voting credits are a separate per-competition allowance (not wallet tokens) — logged for the record without changing the wallet balance.
+async function recordCreditEvent(accountId, { op, type, amount, note, compId }) {
+  try {
+    const w = (await sGet(`wallet:${accountId}`, true)) || { balance: 0 };
+    await sSet(`wtx:${accountId}:${op}`, { id: op, accountId, type, amount, unit: 'credits', balanceAfter: Number(w.balance) || 0, status: 'Completed', note: note || '', compId: compId || null, ref: txRef(op), at: Date.now() }, true);
+  } catch { /* logging is best-effort; never block a vote */ }
+}
+const fmtAmt = (n) => (Math.round(n * 100) / 100).toString();
+function WalletBanner() {
+  return (
+    <div style={{ background: 'rgba(255,176,32,0.1)', border: `1px solid ${C.amber}` }} className="rounded-xl px-3 py-2.5 text-center">
+      <div style={{ color: C.amber }} className="text-xs font-black tracking-wide">KRUSH TEST MODE — DEMO MODE, NO REAL MONEY</div>
+      <div style={{ color: C.muted }} className="text-[10px] mt-0.5">ALL TOKENS, BALANCES, AND TRANSACTIONS ARE SIMULATED. NO REAL MONEY OR PRIZES.</div>
+    </div>
+  );
+}
+function WalletScreen({ user, onBack, onChanged, onToast }) {
+  const accountId = user.username;
+  const [view, setView] = useState('home'); // home | add | withdraw | history | methods | settings
+  const [balance, setBalance] = useState(null);
+  const [cfg, setCfg] = useState(WALLET_DEFAULT_CONFIG);
+  const [txs, setTxs] = useState(null);
+  const [pending, setPending] = useState(null); // { op, amount } for add; { op, amount } for withdraw
+  const [amountText, setAmountText] = useState('');
+  const [result, setResult] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const busyRef = useRef(false);
+  const [openMethod, setOpenMethod] = useState(null);
+  const load = useCallback(async () => {
+    const w = await sGet(`wallet:${accountId}`, true);
+    setBalance(Number(w?.balance) || 0);
+    setCfg(await getWalletConfig());
+    let list = []; try { list = await sGetMany(await sList(`wtx:${accountId}:`, true), true); } catch { list = []; }
+    setTxs(list.sort((a, b) => (b.at || 0) - (a.at || 0)));
+  }, [accountId]);
+  useEffect(() => { load(); }, [load]);
+  const go = (v) => { setView(v); setPending(null); setResult(null); setErr(''); setAmountText(''); };
+  const bal = balance ?? 0;
+
+  const confirmAdd = async () => {
+    if (busyRef.current || !pending) return; busyRef.current = true; setBusy(true); setErr('');
+    try {
+      const fresh = await getWalletConfig();
+      if (!fresh.addTokensEnabled) { setErr('Free demo tokens are turned off right now.'); return; }
+      const r = await applyWalletTx(accountId, { op: pending.op, type: 'DEMO TOKEN DEPOSIT', amount: pending.amount, note: 'Free demo tokens — testing only' });
+      if (!r.ok) { setErr(r.error); return; }
+      setBalance(r.balance); setResult({ kind: 'add', amount: pending.amount, balance: r.balance, duplicate: !!r.duplicate }); setPending(null); onChanged && onChanged(); load();
+    } catch (e) { setErr('Something went wrong. Nothing was added — please try again.'); }
+    finally { busyRef.current = false; setBusy(false); }
+  };
+  const wAmount = parseInt(amountText, 10);
+  const wValid = Number.isInteger(wAmount) && String(wAmount) === amountText.trim() && wAmount >= 1;
+  const feePct = cfg.withdrawalFeePct;
+  const wFee = wValid ? Math.round(wAmount * feePct) / 100 : 0;
+  const wNet = wValid ? Math.round((wAmount - wFee) * 100) / 100 : 0;
+  const reviewWithdraw = () => {
+    if (!wValid) { setErr('Enter a whole number of demo tokens (1 or more).'); return; }
+    if (wAmount > bal) { setErr(`You only have ${fmtAmt(bal)} demo tokens available.`); return; }
+    setErr(''); setPending({ op: uid() + 'w', amount: wAmount });
+  };
+  const confirmWithdraw = async () => {
+    if (busyRef.current || !pending) return; busyRef.current = true; setBusy(true); setErr('');
+    try {
+      const r = await applyWalletTx(accountId, { op: pending.op, type: 'DEMO WITHDRAWAL', amount: -pending.amount, note: 'Simulated — no real funds transferred', extra: { feePct, feeAmount: wFee, netAmount: wNet } });
+      if (!r.ok) { setErr(r.error); return; }
+      setBalance(r.balance); setResult({ kind: 'withdraw', amount: pending.amount, fee: r.tx.feeAmount, net: r.tx.netAmount, balance: r.balance, duplicate: !!r.duplicate }); setPending(null); onChanged && onChanged(); load();
+    } catch (e) { setErr('Something went wrong. Nothing was withdrawn — please try again.'); }
+    finally { busyRef.current = false; setBusy(false); }
+  };
+
+  const bigBtn = (label, sub, onClick, color) => <button onClick={onClick} style={{ background: color || C.surface, color: C.paper, border: `1px solid ${C.surface2}` }} className="w-full rounded-xl px-4 py-3.5 text-left flex items-center justify-between"><span><span className="block text-sm font-bold">{label}</span>{sub && <span style={{ color: C.muted }} className="block text-[11px] mt-0.5">{sub}</span>}</span><span style={{ color: C.muted }}>›</span></button>;
+
+  // ----- ADD TOKENS -----
+  if (view === 'add') return (
+    <div className="pb-8"><TopBar title="Add Tokens" onBack={() => go('home')} />
+      <div className="px-4 pt-4 flex flex-col gap-3">
+        <WalletBanner />
+        {result?.kind === 'add' ? (
+          <div style={{ background: C.surface, border: `1px solid ${C.green}` }} className="rounded-xl p-5 text-center">
+            <div style={{ color: C.green }} className="text-lg font-black">SUCCESS!</div>
+            <div style={{ color: C.paper }} className="text-sm mt-1">{result.amount} Demo Tokens Added.</div>
+            <div style={{ color: C.paper }} className="text-base font-bold mt-1">New Balance: {fmtAmt(result.balance)} Tokens.</div>
+            <div style={{ color: C.muted }} className="text-[11px] mt-2">No real payment was requested or made.</div>
+            <button onClick={() => go('home')} style={{ background: C.blue, color: 'white' }} className="w-full font-bold py-3 rounded-xl mt-4">Back to Wallet</button>
+          </div>
+        ) : !cfg.addTokensEnabled ? (
+          <div style={{ background: C.surface, color: C.muted }} className="rounded-xl p-4 text-sm text-center">Free demo tokens are turned off right now. Ask your facilitator.</div>
+        ) : pending ? (
+          <div style={{ background: C.surface }} className="rounded-xl p-5 text-center">
+            <div style={{ color: C.muted }} className="text-xs">ADD {pending.amount} FREE DEMO TOKENS?</div>
+            <div style={{ color: C.paper }} className="text-sm mt-2">Current Balance: {fmtAmt(bal)}</div>
+            <div style={{ color: C.paper }} className="text-sm">Tokens Added: +{pending.amount}</div>
+            <div style={{ color: C.green }} className="text-base font-black mt-1">New Balance: {fmtAmt(bal + pending.amount)}</div>
+            {err && <div style={{ color: C.red }} className="text-xs mt-2">{err}</div>}
+            <button onClick={confirmAdd} disabled={busy} style={{ background: C.blue, color: 'white', opacity: busy ? 0.7 : 1 }} className="w-full font-bold py-3 rounded-xl mt-4">{busy ? 'Adding…' : 'Confirm — Add Demo Tokens'}</button>
+            <button onClick={() => setPending(null)} disabled={busy} style={{ color: C.muted }} className="w-full text-xs font-semibold py-2 mt-1">Cancel</button>
+          </div>
+        ) : (
+          <>
+            <div style={{ color: C.paper }} className="text-sm font-bold">Choose a package</div>
+            <div style={{ color: C.green }} className="text-[11px] font-black tracking-wide -mt-2">FREE DEMO TOKENS — TESTING ONLY</div>
+            <div className="grid grid-cols-2 gap-3">
+              {cfg.packages.map(n => <button key={n} onClick={() => { setErr(''); setPending({ op: uid() + 'd', amount: n }); }} style={{ background: C.surface, border: `1px solid ${C.surface2}`, color: C.paper }} className="rounded-xl py-5 flex flex-col items-center gap-1"><span className="text-2xl font-black">{n}</span><span style={{ color: C.muted }} className="text-[11px] font-semibold">Demo Tokens</span><span style={{ color: C.green }} className="text-[10px] font-bold">FREE</span></button>)}
+            </div>
+            <div style={{ color: C.muted }} className="text-[11px] text-center">No payment of any kind is requested.</div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+  // ----- WITHDRAW -----
+  if (view === 'withdraw') return (
+    <div className="pb-8"><TopBar title="Withdraw — Demo" onBack={() => go('home')} />
+      <div className="px-4 pt-4 flex flex-col gap-3">
+        <WalletBanner />
+        {result?.kind === 'withdraw' ? (
+          <div style={{ background: C.surface, border: `1px solid ${C.green}` }} className="rounded-xl p-5 text-center">
+            <div style={{ color: C.green }} className="text-lg font-black">DEMO WITHDRAWAL COMPLETE</div>
+            <div style={{ color: C.paper }} className="text-sm mt-2">Demo Withdrawal: {fmtAmt(result.amount)}</div>
+            <div style={{ color: C.muted }} className="text-xs">DEMO fee ({feePct}%): {fmtAmt(result.fee)} · Net: {fmtAmt(result.net)}</div>
+            <div style={{ color: C.paper }} className="text-base font-bold mt-1">Remaining Balance: {fmtAmt(result.balance)}</div>
+            <div style={{ color: C.muted }} className="text-[11px] mt-2">No real funds were transferred.</div>
+            <button onClick={() => go('home')} style={{ background: C.blue, color: 'white' }} className="w-full font-bold py-3 rounded-xl mt-4">Back to Wallet</button>
+          </div>
+        ) : pending ? (
+          <div style={{ background: C.surface }} className="rounded-xl p-5 text-center">
+            <div style={{ color: C.muted }} className="text-xs">WITHDRAW {pending.amount} DEMO TOKENS?</div>
+            <div style={{ color: C.paper }} className="text-sm mt-2">Current Balance: {fmtAmt(bal)}</div>
+            <div style={{ color: C.paper }} className="text-sm">Demo Withdrawal: {pending.amount}</div>
+            <div style={{ color: C.amber }} className="text-xs">DEMO fee ({feePct}%): −{fmtAmt(wFee)} · Net amount: {fmtAmt(wNet)}</div>
+            <div style={{ color: C.green }} className="text-base font-black mt-1">Remaining Balance: {fmtAmt(bal - pending.amount)}</div>
+            <div style={{ color: C.muted }} className="text-[11px] mt-2">Simulated only. No real money moves.</div>
+            {err && <div style={{ color: C.red }} className="text-xs mt-2">{err}</div>}
+            <button onClick={confirmWithdraw} disabled={busy} style={{ background: C.blue, color: 'white', opacity: busy ? 0.7 : 1 }} className="w-full font-bold py-3 rounded-xl mt-4">{busy ? 'Working…' : 'CONFIRM DEMO WITHDRAWAL'}</button>
+            <button onClick={() => setPending(null)} disabled={busy} style={{ color: C.muted }} className="w-full text-xs font-semibold py-2 mt-1">Cancel</button>
+          </div>
+        ) : (
+          <div style={{ background: C.surface }} className="rounded-xl p-5">
+            <div style={{ color: C.muted }} className="text-xs">Available: <b style={{ color: C.paper }}>{fmtAmt(bal)} demo tokens</b></div>
+            <div style={{ color: C.paper }} className="text-sm font-bold mt-3 mb-1.5">Amount of demo tokens</div>
+            <input value={amountText} onChange={e => { setAmountText(e.target.value.replace(/[^0-9]/g, '')); setErr(''); }} inputMode="numeric" placeholder="25" style={{ background: C.surface2, color: C.paper, fontSize: 16 }} className="w-full rounded-lg px-4 py-3.5 outline-none" />
+            <div style={{ background: C.surface2 }} className="rounded-lg px-3 py-2 mt-3 text-xs flex items-center justify-between"><span style={{ color: C.paper }} className="font-bold">DEMO WITHDRAWAL</span><span style={{ color: C.muted }}>No real funds</span></div>
+            {wValid && <div style={{ color: C.muted }} className="text-xs mt-2">DEMO fee ({feePct}%): −{fmtAmt(wFee)} · Net: {fmtAmt(wNet)}</div>}
+            {err && <div style={{ color: C.red }} className="text-xs mt-2">{err}</div>}
+            <button onClick={reviewWithdraw} style={{ background: C.blue, color: 'white' }} className="w-full font-bold py-3 rounded-xl mt-4">Review Withdrawal</button>
+            <div style={{ color: C.muted }} className="text-[11px] mt-3">This never asks for banking information and never sends money anywhere.</div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+  // ----- HISTORY -----
+  if (view === 'history') {
+    const groups = []; (txs || []).forEach(t => { const d = new Date(t.at).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' }).toUpperCase(); const g = groups[groups.length - 1]; if (g && g.d === d) g.list.push(t); else groups.push({ d, list: [t] }); });
+    return (
+      <div className="pb-8"><TopBar title="Transaction History" onBack={() => go('home')} />
+        <div className="px-4 pt-4 flex flex-col gap-3">
+          <WalletBanner />
+          {txs === null ? <Spinner /> : txs.length === 0 ? <EmptyState text="No wallet activity yet. Add demo tokens, enter a competition, or cast a paid vote and it will show up here." /> : groups.map(g => (
+            <div key={g.d}>
+              <div style={{ color: C.muted }} className="text-[11px] font-bold tracking-wide mb-1.5 mt-1">{g.d}</div>
+              <div className="flex flex-col gap-2">{g.list.map(t => (
+                <div key={t.id} style={{ background: C.surface }} className="rounded-xl px-3 py-2.5">
+                  <div className="flex items-center justify-between">
+                    <span style={{ color: t.amount >= 0 ? C.green : C.paper }} className="text-sm font-black">{t.amount >= 0 ? '+' : '−'}{fmtAmt(Math.abs(t.amount))} {t.unit === 'credits' ? (Math.abs(t.amount) === 1 ? 'Credit' : 'Credits') : (Math.abs(t.amount) === 1 ? 'Token' : 'Tokens')}</span>
+                    <span style={{ color: C.green }} className="text-[10px] font-bold">{t.status}</span>
+                  </div>
+                  <div style={{ color: C.paper }} className="text-xs font-semibold mt-0.5">{t.type}{t.note ? <span style={{ color: C.muted }} className="font-normal"> · {t.note}</span> : null}</div>
+                  <div style={{ color: C.muted }} className="text-[10px] mt-1">{new Date(t.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} · {t.unit === 'credits' ? 'voting credits (not wallet tokens)' : `Balance after: ${fmtAmt(t.balanceAfter)}`} · Ref {t.ref}{t.feeAmount ? ` · DEMO fee ${fmtAmt(t.feeAmount)}, net ${fmtAmt(t.netAmount)}` : ''}</div>
+                </div>
+              ))}</div>
+            </div>
+          ))}
+          {txs !== null && <div style={{ color: C.muted }} className="text-[10px] text-center">Only activity recorded since the wallet ledger was added is listed. Earlier activity isn't shown.</div>}
+        </div>
+      </div>
+    );
+  }
+  // ----- PAYMENT METHODS (preview only) -----
+  if (view === 'methods') {
+    const methods = [
+      { k: 'visa', label: 'Visa', color: '#1A1F71', text: 'Pay with a Visa card.' },
+      { k: 'mastercard', label: 'Mastercard', color: '#EB001B', text: 'Pay with a Mastercard.' },
+      { k: 'cashapp', label: 'Cash App', color: '#00D64F', text: 'Pay from your Cash App balance.' },
+      { k: 'paypal', label: 'PayPal', color: '#003087', text: 'Pay with your PayPal account.' },
+      { k: 'venmo', label: 'Venmo', color: '#3D95CE', text: 'Pay with your Venmo account.' },
+    ];
+    return (
+      <div className="pb-8"><TopBar title="Payment Methods" onBack={() => go('home')} />
+        <div className="px-4 pt-4 flex flex-col gap-3">
+          <WalletBanner />
+          <div style={{ background: 'rgba(255,46,126,0.1)', border: `1px solid ${C.pink}`, color: C.pink }} className="rounded-xl px-3 py-2.5 text-center text-xs font-black tracking-wide">COMING SOON — REAL PAYMENTS DISABLED DURING TESTING</div>
+          <div style={{ color: C.muted }} className="text-xs">These are possible FUTURE options so testers can see how the finished wallet might work. None of them is connected or active. Tap one to read about it.</div>
+          <div className="flex flex-col gap-2">
+            {methods.map(m => (
+              <div key={m.k} style={{ background: C.surface, border: `1px solid ${C.surface2}` }} className="rounded-xl overflow-hidden">
+                <button onClick={() => setOpenMethod(openMethod === m.k ? null : m.k)} className="w-full px-4 py-3 flex items-center gap-3 text-left">
+                  <span style={{ color: m.color, background: '#fff' }} className="w-10 h-10 rounded-lg flex items-center justify-center"><Icon name={m.k} size={26} /></span>
+                  <span className="flex-1"><span style={{ color: C.paper }} className="block text-sm font-bold">{m.label}</span><span style={{ color: C.muted }} className="block text-[10px] font-semibold">COMING SOON · NOT ACTIVE</span></span>
+                  <span style={{ color: C.muted }}>{openMethod === m.k ? '▾' : '›'}</span>
+                </button>
+                {openMethod === m.k && (
+                  <div style={{ borderTop: `1px solid ${C.surface2}`, color: C.muted }} className="px-4 py-3 text-xs flex flex-col gap-1.5">
+                    <div style={{ color: C.paper }} className="font-semibold">How it is intended to work (preview only)</div>
+                    <div>{m.text} Later, you would link it once, verify it, and use it to add real funds or cash out winnings.</div>
+                    <div>Linking would happen through the provider's own secure screens — KRUSH would not see or store your card or login details.</div>
+                    <div style={{ color: C.amber }} className="font-semibold">Not available now. Nothing can be entered or charged here. Whether {m.label} can be offered depends on that provider's approval before launch.</div>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+          <div style={{ background: C.surface }} className="rounded-xl p-4">
+            <div style={{ color: C.paper }} className="text-sm font-bold mb-1.5">Before real payments can launch</div>
+            <div style={{ color: C.muted }} className="text-xs mb-2">The finished wallet will need proper checks. None of these exist in this prototype, and no one is marked "verified."</div>
+            <ul style={{ color: C.muted }} className="text-xs flex flex-col gap-1 list-disc pl-4">
+              <li>Identity verification</li><li>Age verification (KRUSH is 18+)</li><li>Payment method verification</li><li>Fraud prevention</li><li>Withdrawal eligibility</li><li>Account ownership verification</li><li>Each payment provider's own rules and restrictions</li>
+            </ul>
+            <div style={{ color: C.muted }} className="text-[11px] mt-3">Real-money contests, deposits, withdrawals and prizes stay switched off until legal review of the contest rules, payment processing and financial regulations is complete, using established payment providers.</div>
+          </div>
+          <div style={{ color: C.red }} className="text-[11px] font-semibold text-center">Do not enter any real card, bank or payment information anywhere in this prototype.</div>
+        </div>
+      </div>
+    );
+  }
+  // ----- SETTINGS (read-only info) -----
+  if (view === 'settings') return (
+    <div className="pb-8"><TopBar title="Wallet Settings" onBack={() => go('home')} />
+      <div className="px-4 pt-4 flex flex-col gap-3">
+        <WalletBanner />
+        <div style={{ background: C.surface }} className="rounded-xl p-4 text-xs flex flex-col gap-2.5">
+          <div className="flex justify-between"><span style={{ color: C.muted }}>Wallet mode</span><b style={{ color: C.amber }}>DEMO — no real money</b></div>
+          <div className="flex justify-between"><span style={{ color: C.muted }}>Free demo tokens</span><b style={{ color: C.paper }}>{cfg.addTokensEnabled ? 'Available' : 'Turned off'}</b></div>
+          <div className="flex justify-between"><span style={{ color: C.muted }}>Demo withdrawal fee</span><b style={{ color: C.paper }}>{feePct}% (simulated)</b></div>
+          <div className="flex justify-between"><span style={{ color: C.muted }}>Real payments</span><b style={{ color: C.paper }}>Disabled</b></div>
+          <div className="flex justify-between"><span style={{ color: C.muted }}>Account</span><b style={{ color: C.paper }}>@{handleOf(user)}</b></div>
+        </div>
+        <div style={{ color: C.muted }} className="text-[11px]">Only you can open your wallet in the app; other testers can never see your balance or history. The facilitator controls the demo-token and fee settings above. Stronger account-level protection arrives with secure sign-in, before any real money is involved.</div>
+      </div>
+    </div>
+  );
+  // ----- HOME -----
+  const recent = (txs || []).slice(0, 3);
+  return (
+    <div className="pb-8"><TopBar title="KRUSH Wallet" onBack={onBack} />
+      <div className="px-4 pt-4 flex flex-col gap-3">
+        <WalletBanner />
+        <div style={{ background: `linear-gradient(135deg, ${C.blue}, ${C.pink})` }} className="rounded-2xl p-6 text-center">
+          <div style={{ color: 'rgba(255,255,255,0.85)' }} className="text-[11px] font-bold tracking-wide">AVAILABLE DEMO BALANCE</div>
+          <div style={{ color: 'white' }} className="text-4xl font-black mt-1">{balance === null ? '…' : fmtAmt(bal)}</div>
+          <div style={{ color: 'white' }} className="text-sm font-bold">KRUSH TOKENS</div>
+        </div>
+        <div className="flex flex-col gap-2">
+          {bigBtn('ADD TOKENS', 'Free demo tokens — testing only', () => go('add'))}
+          {bigBtn('WITHDRAW — DEMO', `Simulated only · ${feePct}% DEMO fee`, () => go('withdraw'))}
+          {bigBtn('TRANSACTION HISTORY', 'Every deposit, entry, vote and withdrawal', () => { go('history'); load(); })}
+          {bigBtn('PAYMENT METHODS', 'Coming soon — real payments disabled', () => go('methods'))}
+          {bigBtn('WALLET SETTINGS', null, () => go('settings'))}
+        </div>
+        {recent.length > 0 && (
+          <div>
+            <div style={{ color: C.muted }} className="text-[11px] font-bold tracking-wide mb-1.5 mt-2">RECENT ACTIVITY</div>
+            <div className="flex flex-col gap-1.5">{recent.map(t => <div key={t.id} style={{ background: C.surface }} className="rounded-lg px-3 py-2 flex items-center justify-between"><span style={{ color: C.paper }} className="text-xs font-semibold">{t.type}</span><span style={{ color: t.amount >= 0 ? C.green : C.paper }} className="text-xs font-black">{t.amount >= 0 ? '+' : '−'}{fmtAmt(Math.abs(t.amount))}{t.unit === 'credits' ? ' cr' : ''}</span></div>)}</div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+function WalletConfigCard({ onToast }) {
+  const [cfg, setCfg] = useState(null);
+  const [pct, setPct] = useState('3');
+  useEffect(() => { getWalletConfig().then(c => { setCfg(c); setPct(String(c.withdrawalFeePct)); }); }, []);
+  if (!cfg) return null;
+  const save = async (next) => { setCfg(next); await sSet('config:wallet', { addTokensEnabled: next.addTokensEnabled, withdrawalFeePct: next.withdrawalFeePct }, true); onToast('Wallet settings saved.'); };
+  return (
+    <div style={{ background: C.surface }} className="rounded-xl p-3 mt-2">
+      <div style={{ color: C.paper }} className="text-sm font-bold mb-2">Demo wallet settings</div>
+      <button onClick={() => save({ ...cfg, addTokensEnabled: !cfg.addTokensEnabled })} style={{ background: cfg.addTokensEnabled ? 'rgba(46,213,115,0.15)' : C.surface2, color: cfg.addTokensEnabled ? C.green : C.muted }} className="w-full text-xs font-bold py-2.5 rounded-lg mb-2">Free demo tokens: {cfg.addTokensEnabled ? 'ON (tap to turn off)' : 'OFF (tap to turn on)'}</button>
+      <div className="flex items-center gap-2"><span style={{ color: C.muted }} className="text-xs flex-1">Demo withdrawal fee (%)</span>
+        <input value={pct} onChange={e => setPct(e.target.value.replace(/[^0-9.]/g, ''))} onBlur={() => { const n = parseFloat(pct); if (isFinite(n) && n >= 0 && n <= 50) save({ ...cfg, withdrawalFeePct: n }); else setPct(String(cfg.withdrawalFeePct)); }} inputMode="decimal" style={{ background: C.surface2, color: C.paper, fontSize: 16 }} className="w-20 rounded-lg px-3 py-2 text-center outline-none" /></div>
     </div>
   );
 }
@@ -1681,8 +2267,7 @@ function CompetitionDetail({ comp: compProp, user, onBack, onToast, onCompUpdate
     if (winnerEntry) {
       const already = await sGet(`walletlog:${liveComp.id}`, true);
       if (!already) {
-        const wallet = (await sGet(`wallet:${winnerEntry.username}`, true)) || { balance: 0 };
-        await sSet(`wallet:${winnerEntry.username}`, { balance: wallet.balance + pot }, true);
+        await applyWalletTx(winnerEntry.username, { op: `win-${liveComp.id}-${winnerEntry.id}`, type: 'DEMO COMPETITION WINNINGS', amount: pot, compId: liveComp.id, note: liveComp.title });
         await sSet(`walletlog:${liveComp.id}`, { awardedTo: winnerEntry.username, amount: pot }, true);
       }
     }
@@ -1768,6 +2353,7 @@ function CompetitionDetail({ comp: compProp, user, onBack, onToast, onCompUpdate
     await sSet(key, existing + amount, true);
     const newRemaining = credits - amount;
     await sSet(`credits:${comp.id}:${user.username}`, { remaining: newRemaining }, true);
+    recordCreditEvent(user.username, { op: `vote-${comp.id}-${entry.id}-${uid()}`, type: 'PAID VOTE USING DEMO CREDITS', amount: -amount, compId: comp.id, note: comp.title });
     onToast(`✓ Vote counted — used ${amount} credit${amount === 1 ? '' : 's'}. Test credits only, no real money.`);
     load();
   };
@@ -2040,10 +2626,11 @@ function CompetitionDetail({ comp: compProp, user, onBack, onToast, onCompUpdate
     else setPaymentOpen(true);
   };
   const addToWallet = async () => {
-    const wb = (await sGet(`wallet:${user.username}`, true)) || { balance: STARTING_WALLET_BALANCE };
-    const updated = { balance: wb.balance + WALLET_TOPUP_AMOUNT };
-    await sSet(`wallet:${user.username}`, updated, true);
-    setWalletBalance(updated.balance);
+    const cfg = await getWalletConfig();
+    if (!cfg.addTokensEnabled) { onToast('Free demo tokens are turned off right now. Ask your facilitator.'); return; }
+    const r = await applyWalletTx(user.username, { op: uid() + 'd', type: 'DEMO TOKEN DEPOSIT', amount: WALLET_TOPUP_AMOUNT, note: 'Free demo tokens — testing only', startBalance: STARTING_WALLET_BALANCE });
+    if (!r.ok) { onToast(r.error); return; }
+    setWalletBalance(r.balance);
     setInsufficientOpen(false);
     setPaymentOpen(true);
   };
@@ -2059,13 +2646,12 @@ function CompetitionDetail({ comp: compProp, user, onBack, onToast, onCompUpdate
     const freshComp = (await sGet(`comp:${comp.id}`, true)) || comp;
     if (freshComp.countdownStartedAt && Date.now() >= freshComp.endsAt) { setJustEnded(true); setSubmittingEntry(false); return; }
     const fee = currentEntryFee();
-    const wb = (await sGet(`wallet:${user.username}`, true)) || { balance: STARTING_WALLET_BALANCE };
-    const newBalance = wb.balance - fee;
-    await sSet(`wallet:${user.username}`, { balance: newBalance }, true);
-    setWalletBalance(newBalance);
+    const entryId = uid();
+    const feeRes = await applyWalletTx(user.username, { op: `fee-${entryId}`, type: 'COMPETITION ENTRY', amount: -fee, compId: comp.id, note: comp.title, startBalance: STARTING_WALLET_BALANCE });
+    if (!feeRes.ok) { onToast(feeRes.error); setSubmittingEntry(false); return; }
+    setWalletBalance(feeRes.balance);
     const contentId = uid();
     await sSet(`content:${contentId}`, { id: contentId, username: user.username, title: '', caption: caption.trim(), kind: 'video', videoUrl: uploadedVideoUrl || null, createdAt: Date.now() }, true);
-    const entryId = uid();
     await sSet(`entry:${comp.id}:${entryId}`, { id: entryId, compId: comp.id, username: user.username, contentId, enteredAt: Date.now(), feePaid: fee }, true);
     await sSet(`role:${comp.id}:${user.username}`, { role: 'competitor', at: Date.now() }, true);
     const newCount = liveEntries.length + 1;
@@ -2508,7 +3094,7 @@ function CompetitionDetail({ comp: compProp, user, onBack, onToast, onCompUpdate
           </div>
         )}
       </div>
-      {profileFor && <PublicProfileScreen accountId={profileFor} viewerId={user.username} onClose={() => setProfileFor(null)} />}
+      {profileFor && <PublicProfileScreen accountId={profileFor} viewer={user} onToast={onToast} onClose={() => setProfileFor(null)} />}
       {creditEntry && <CreditVoteModal entry={creditEntry} remaining={credits} onConfirm={confirmCreditVote} onClose={() => setCreditEntry(null)} />}
       {commentsFor && <CommentsSheet targetId={commentsFor.id} targetLabel={`@${commentsFor.username}`} user={user} onClose={closeComments} onToast={onToast} />}
       {shareForEntry && <ShareSheet item={{ id: shareForEntry.id, username: shareForEntry.username, caption: contents[shareForEntry.contentId]?.caption || '', compTitle: comp.title }} user={user} onClose={() => setShareForEntry(null)} onToast={onToast} />}
@@ -2608,17 +3194,9 @@ function WinnersScreen({ comps, onOpenComp }) {
   );
 }
 
-function ProfileScreen({ user, myContent, myEntries, comps, wallet, onFeedback, onAdmin, onLogout, onOpenComp, onToast, onEditProfile }) {
-  const [tab, setTab] = useState('uploads');
-  const [reposts, setReposts] = useState([]);
-  const wins = comps.filter(c => c.status === 'ended' && c.winnerEntryId && myEntries.some(e => e.id === c.winnerEntryId));
-  useEffect(() => {
-    (async () => {
-      let all = [];
-      try { all = await sGetMany(await sList('repost:', true), true); } catch { all = []; }
-      setReposts(all.filter(r => r.repostedBy === user.username).sort((a, b) => b.at - a.at));
-    })();
-  }, [user.username]);
+function ProfileScreen({ user, myContent, myEntries, comps, wallet, onFeedback, onAdmin, onLogout, onOpenComp, onToast, onEditProfile, onOpenWallet }) {
+  const data = useProfileData(user.username);
+  const wins = data ? data.items.filter(i => i.result === 'win') : [];
   return (
     <div className="pb-4">
       <TopBar title="Profile" />
@@ -2631,56 +3209,19 @@ function ProfileScreen({ user, myContent, myEntries, comps, wallet, onFeedback, 
         <InterestChips interests={user.interests} />
         <SocialLinks links={user.links} />
         <button onClick={onEditProfile} style={{ background: C.blue, color: 'white' }} className="font-bold px-8 py-2.5 rounded-xl text-sm mt-4">✏️ Edit Profile</button>
-        {wins.length > 0 && <div className="flex gap-1 mt-2">{wins.map(c => <span key={c.id} title={c.title} className="text-xl">🏆</span>)}</div>}
-        <div className="flex gap-6 mt-3">
-          <Stat label="Wins" value={wins.length} color={C.amber} />
-          <Stat label="Entries" value={myEntries.length} color={C.pink} />
-          <Stat label="Uploads" value={myContent.length} color={C.blue} />
-        </div>
+        {wins.length > 0 && <div className="flex gap-1 mt-3">{wins.map(i => <span key={i.entry.id} title={i.comp.title} className="text-xl">🏆</span>)}</div>}
+        <ProfileStatsRow data={data} />
 
-        <div style={{ background: C.surface, border: `1px solid ${C.amber}` }} className="w-full rounded-xl p-4 mt-5 flex items-center gap-3">
+        <button onClick={onOpenWallet} style={{ background: C.surface, border: `1px solid ${C.amber}` }} className="w-full rounded-xl p-4 mt-5 flex items-center gap-3 text-left">
           <Wallet size={22} color={C.amber} />
           <div className="flex-1">
             <div style={{ color: C.paper }} className="text-sm font-bold">Demo KRUSH Wallet</div>
-            <div style={{ color: C.muted }} className="text-[10px]">DEMO / TEST ONLY — NO REAL MONEY</div>
+            <div style={{ color: C.muted }} className="text-[10px]">DEMO / TEST ONLY — NO REAL MONEY · Tap to open</div>
           </div>
-          <div style={{ color: C.amber }} className="text-xl font-black">${wallet.balance}</div>
-        </div>
+          <div className="text-right"><div style={{ color: C.amber }} className="text-xl font-black leading-tight">{fmtAmt(Number(wallet.balance) || 0)}</div><div style={{ color: C.amber }} className="text-[9px] font-bold">TOKENS</div></div>
+        </button>
 
-        <div style={{ background: C.surface }} className="flex rounded-xl p-1 mt-6 w-full">
-          <button onClick={() => setTab('uploads')} style={{ background: tab === 'uploads' ? C.blue : 'transparent', color: tab === 'uploads' ? 'white' : C.muted }} className="flex-1 text-xs font-bold py-2 rounded-lg">Uploads</button>
-          <button onClick={() => setTab('history')} style={{ background: tab === 'history' ? C.blue : 'transparent', color: tab === 'history' ? 'white' : C.muted }} className="flex-1 text-xs font-bold py-2 rounded-lg">Entries</button>
-          <button onClick={() => setTab('reposts')} style={{ background: tab === 'reposts' ? C.blue : 'transparent', color: tab === 'reposts' ? 'white' : C.muted }} className="flex-1 text-xs font-bold py-2 rounded-lg">Reposts</button>
-        </div>
-        <div className="w-full mt-4">
-          {tab === 'uploads' ? (myContent.length === 0 ? <EmptyState text="No uploads yet." /> : (
-            <div className="flex flex-col gap-2">{myContent.map(c => <div key={c.id} style={{ background: C.surface }} className="rounded-xl p-3 flex items-center gap-3"><span className="text-xl">{c.kind === 'photo' ? '🖼️' : '🎬'}</span><span style={{ color: C.paper }} className="text-sm">{c.title || c.caption}</span></div>)}</div>
-          )) : tab === 'history' ? (myEntries.length === 0 ? <EmptyState text="No competitions entered yet." /> : (
-            <div className="flex flex-col gap-2">{myEntries.map(e => {
-              const c = comps.find(x => x.id === e.compId);
-              const won = c?.winnerEntryId === e.id;
-              return (
-                <div key={e.id} onClick={() => c ? onOpenComp(c, null) : onToast("Couldn't find that competition — it may have been reset.")}
-                  role="button" tabIndex={0} style={{ background: C.surface, cursor: 'pointer' }} className="rounded-xl p-3 flex items-center gap-3 w-full text-left active:opacity-70">
-                  <span className="text-xl">{c ? CAT_EMOJI[c.category] : '🏆'}</span>
-                  <div className="flex-1"><div style={{ color: C.paper }} className="text-sm font-semibold">{c?.title || 'Competition'}</div><div style={{ color: won ? C.amber : C.muted }} className="text-xs">{c?.status === 'ended' ? (won ? '🏆 You won!' : 'Results in') : 'In progress'}</div></div>
-                  <span style={{ color: C.blue }} className="text-xs font-bold flex-shrink-0">View Competition &gt;</span>
-                </div>
-              );
-            })}</div>
-          )) : (reposts.length === 0 ? <EmptyState text="Nothing reposted yet." /> : (
-            <div className="flex flex-col gap-2">{reposts.map(r => (
-              <div key={r.id} style={{ background: C.surface }} className="rounded-xl p-3">
-                <div style={{ color: C.muted }} className="text-[10px] mb-1.5">@{handleOf(user)} reposted</div>
-                <div style={{ background: C.surface2 }} className="rounded-lg p-2.5">
-                  <div style={{ color: C.paper }} className="text-xs font-bold">@{r.originalUsername}{r.compTitle ? ` · ${r.compTitle}` : ''}</div>
-                  <div style={{ color: C.muted }} className="text-xs truncate">{r.originalCaption}</div>
-                </div>
-                {r.message && <div style={{ color: C.paper }} className="text-xs mt-1.5">{r.message}</div>}
-              </div>
-            ))}</div>
-          ))}
-        </div>
+        <ProfileTabs accountId={user.username} profile={user} data={data} viewer={user} onToast={onToast} onOpenComp={onOpenComp} />
         <button onClick={onFeedback} style={{ background: C.blue, color: 'white' }} className="w-full font-bold py-3 rounded-xl mt-6">Give Feedback</button>
         <button onClick={onLogout} style={{ color: C.muted, border: `1px solid ${C.surface2}` }} className="w-full font-bold py-3 rounded-xl mt-3 text-sm">Log Out (test session)</button>
         <button onClick={onAdmin} style={{ color: C.muted }} className="text-xs mt-6 flex items-center gap-1"><Shield size={12} /> Facilitator Tools</button>
@@ -2776,6 +3317,7 @@ function AdminPanel({ comps, reloadComps, onBack, onToast }) {
     <div className="pb-8">
       <TopBar title="Facilitator Tools" onBack={onBack} />
       <div className="px-4 pt-4">
+        <WalletConfigCard onToast={onToast} />
         <SectionLabel text={`Competitions (${comps.length})`} />
         <div className="flex flex-col gap-2">
           {comps.map(c => (
@@ -2823,6 +3365,7 @@ export default function KrushCompetitionApp() {
   const [inAdmin, setInAdmin] = useState(false); const [adminUnlocked, setAdminUnlocked] = useState(false);
   const [inFeedback, setInFeedback] = useState(false);
   const [inEditProfile, setInEditProfile] = useState(false);
+  const [inWallet, setInWallet] = useState(false);
   const [toast, setToast] = useState(null);
 
   // ---- Home video feed + notifications state ----
@@ -2974,6 +3517,7 @@ export default function KrushCompetitionApp() {
       </Shell>
     );
   }
+  if (inWallet) return <Shell><WalletScreen user={user} onBack={() => { setInWallet(false); reloadMine(user); }} onChanged={() => reloadMine(user)} onToast={showToast} />{toast && <Toast message={toast} onDone={() => setToast(null)} />}</Shell>;
   if (inEditProfile) return <Shell><EditProfileScreen user={user} onCancel={() => setInEditProfile(false)} onSaved={(u) => { setUser(u); setInEditProfile(false); }} onToast={showToast} />{toast && <Toast message={toast} onDone={() => setToast(null)} />}</Shell>;
   if (inFeedback) return <Shell><FeedbackScreen user={user} onBack={() => setInFeedback(false)} onDone={() => setInFeedback(false)} onToast={showToast} />{toast && <Toast message={toast} onDone={() => setToast(null)} />}</Shell>;
   if (inAdmin) return (
@@ -3089,7 +3633,7 @@ export default function KrushCompetitionApp() {
     ),
     create: <CreateScreen user={user} myContent={myContent} comps={comps} onToast={showToast} reloadContent={() => reloadMine(user)} onOpenComp={openCompWithIntent} />,
     winners: <WinnersScreen comps={comps} onOpenComp={setOpenComp} />,
-    profile: <ProfileScreen user={user} myContent={myContent} myEntries={myEntries} comps={comps} wallet={wallet} onFeedback={() => setInFeedback(true)} onAdmin={() => setInAdmin(true)} onLogout={logout} onOpenComp={(c, intent) => openCompWithIntent(c, intent)} onToast={showToast} onEditProfile={() => setInEditProfile(true)} />,
+    profile: <ProfileScreen user={user} myContent={myContent} myEntries={myEntries} comps={comps} wallet={wallet} onFeedback={() => setInFeedback(true)} onAdmin={() => setInAdmin(true)} onLogout={logout} onOpenComp={(c, intent) => openCompWithIntent(c, intent)} onToast={showToast} onEditProfile={() => setInEditProfile(true)} onOpenWallet={() => setInWallet(true)} />,
   };
 
   const navigateTab = (id) => {
