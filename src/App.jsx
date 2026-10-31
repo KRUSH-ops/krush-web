@@ -839,12 +839,13 @@ const REPORT_REASONS = ['Harassment/Bullying', 'Spam', 'Hate/Inappropriate Conte
 
 function CommentRow({ c, replies, expanded, onToggleExpand, liked, onToggleLike, onReply, onEdit, onDelete, onReport, isOwn, canReply }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const prof = useProfile(c.username);
   return (
     <div className="flex gap-2">
-      <div style={{ background: C.surface2 }} className="w-8 h-8 rounded-full flex items-center justify-center text-sm flex-shrink-0">{c.avatar || '🙂'}</div>
+      <Avatar profile={prof} fallback={c.avatar} size={32} />
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
-          <span style={{ color: C.paper }} className="text-xs font-bold">@{c.username}</span>
+          <span style={{ color: C.paper }} className="text-xs font-bold">@{prof ? handleOf(prof) : c.username}</span>
           <span style={{ color: C.muted }} className="text-[10px]">{c.minutesAgo != null ? `${c.minutesAgo}m ago` : 'just now'}{c.isEdited ? ' · edited' : ''}</span>
           {isOwn && !c.deleted && (
             <div className="relative ml-auto">
@@ -1076,7 +1077,7 @@ function ShareSheet({ item, user, onClose, onToast }) {
         {!reposting ? (
           <>
             <div style={{ color: C.paper }} className="font-bold mb-1">Share</div>
-            <div style={{ color: C.muted }} className="text-xs mb-4">@{item.username}{item.compTitle ? ` · ${item.compTitle}` : ''}</div>
+            <div style={{ color: C.muted }} className="text-xs mb-4"><Handle accountId={item.username} />{item.compTitle ? ` · ${item.compTitle}` : ''}</div>
             <div className="grid grid-cols-2 gap-2 mb-2">
               <button onClick={copyLink} style={{ background: C.surface2, color: C.paper }} className="text-xs font-bold py-3 rounded-lg">Copy Link</button>
               <button onClick={nativeShare} style={{ background: C.surface2, color: C.paper }} className="text-xs font-bold py-3 rounded-lg">Text / Social Share</button>
@@ -1089,7 +1090,7 @@ function ShareSheet({ item, user, onClose, onToast }) {
             <div style={{ color: C.paper }} className="font-bold mb-1">Repost to My KRUSH</div>
             <div style={{ background: C.surface2 }} className="rounded-lg p-3 mb-3">
               <div style={{ color: C.muted }} className="text-[10px] mb-1">Original creator</div>
-              <div style={{ color: C.paper }} className="text-sm font-semibold">@{item.username}</div>
+              <div style={{ color: C.paper }} className="text-sm font-semibold"><Handle accountId={item.username} /></div>
               <div style={{ color: C.muted }} className="text-xs truncate">{item.caption}</div>
             </div>
             <textarea value={repostMsg} onChange={e => setRepostMsg(e.target.value)} rows={2} style={{ background: C.surface2, color: C.paper, border: 'none' }} className="w-full rounded-lg px-3 py-2 text-sm outline-none resize-none mb-3" />
@@ -1108,7 +1109,7 @@ function CreditVoteModal({ entry, remaining, onConfirm, onClose }) {
     <div className="fixed inset-0 z-50 flex items-end" style={{ background: 'rgba(0,0,0,0.6)' }} onClick={onClose}>
       <div style={{ background: C.surface }} onClick={e => e.stopPropagation()} className="w-full rounded-t-2xl p-6">
         <div style={{ color: C.paper }} className="font-bold mb-1">Use Voting Credits</div>
-        <div style={{ color: C.muted }} className="text-xs mb-4">Give extra votes to @{entry.username}. 1 credit = 1 vote. {remaining} credit{remaining === 1 ? '' : 's'} left.</div>
+        <div style={{ color: C.muted }} className="text-xs mb-4">Give extra votes to <Handle accountId={entry.username} />. 1 credit = 1 vote. {remaining} credit{remaining === 1 ? '' : 's'} left.</div>
         <div className="flex items-center justify-center gap-4 mb-4">
           <button onClick={() => setAmt(a => Math.max(1, a - 1))} style={{ background: C.surface2, color: C.paper }} className="w-10 h-10 rounded-full font-bold text-lg">–</button>
           <span style={{ color: C.paper }} className="text-2xl font-black w-10 text-center">{amt}</span>
@@ -1121,157 +1122,497 @@ function CreditVoteModal({ entry, remaining, onConfirm, onClose }) {
   );
 }
 
-// ---------- ENTRY ROW ----------
-function EntryRow({ entry, content, voteTotal, isSelf, live, freeVoteUsed, credits, onFreeVote, onOpenCredits, onComment, onShare, onOpenViewer, refreshTick }) {
-  const [commentCount, setCommentCount] = useState(() => mockCommentsFor(entry.id).length);
-  useEffect(() => { countTopLevelComments(entry.id).then(setCommentCount); }, [entry.id, refreshTick]);
+// ---------- PROFILE SYSTEM ----------
+// Every account has a PERMANENT internal ID: user.username in the stored record. For accounts that existed
+// before profile editing, that ID is simply the username they signed up with, so every existing entry, vote,
+// comment, upload and wallet stays attached with zero data rewriting. The name people SEE is the separate
+// `handle` field (falls back to the permanent ID until someone renames themselves). `handle:{lowercase}`
+// records map a public username back to the permanent ID (used for uniqueness checks and login).
+// Private data (date of birth) lives under `private:{id}` and is never copied into the public `user:{id}` record.
+const handleOf = (u) => (u && (u.handle || u.username)) || '';
+const profileCache = new Map(); // accountId -> { p, t }
+const profileInflight = new Map();
+const profileSubs = new Set();
+const cacheProfile = (p) => { if (!p?.username) return; profileCache.set(p.username, { p, t: Date.now() }); profileSubs.forEach(f => { try { f(); } catch {} }); };
+async function getProfile(accountId, force = false) {
+  if (!accountId) return null;
+  const hit = profileCache.get(accountId);
+  if (!force && hit && Date.now() - hit.t < 30000) return hit.p;
+  if (!force && profileInflight.has(accountId)) return profileInflight.get(accountId);
+  const pr = (async () => {
+    let p = null;
+    try { p = (await sGet(`user:${accountId}`, true)) || null; } catch { p = null; }
+    profileCache.set(accountId, { p, t: Date.now() });
+    profileInflight.delete(accountId);
+    return p;
+  })();
+  profileInflight.set(accountId, pr);
+  return pr;
+}
+function useProfile(accountId) {
+  const [p, setP] = useState(() => profileCache.get(accountId)?.p ?? null);
+  useEffect(() => {
+    if (!accountId) return undefined;
+    let alive = true;
+    getProfile(accountId).then(x => { if (alive) setP(x); });
+    const sub = () => { const c = profileCache.get(accountId); if (alive && c) setP(c.p); };
+    profileSubs.add(sub);
+    return () => { alive = false; profileSubs.delete(sub); };
+  }, [accountId]);
+  return p;
+}
+const thumbUrl = (url, px) => (typeof url === 'string' && url.includes('/res.cloudinary.com/') && url.includes('/upload/')) ? url.replace('/upload/', `/upload/c_fill,w_${px * 2},h_${px * 2},f_auto,q_auto/`) : url;
+function Avatar({ profile, fallback, size = 32, gradient = false }) {
+  const url = profile?.avatarUrl;
+  const [bad, setBad] = useState(false);
+  useEffect(() => { setBad(false); }, [url]);
+  const emoji = (profile?.avatar && typeof profile.avatar === 'string' && profile.avatar.length <= 8 ? profile.avatar : null) || fallback || '🙂';
   return (
-    <div style={{ background: C.surface }} className="rounded-xl p-4 flex flex-col gap-2">
-      <div className="flex items-center gap-3">
-        <button onClick={() => onOpenViewer && onOpenViewer(entry)} aria-label="Open video" className="relative w-16 h-16 rounded-lg flex-shrink-0 overflow-hidden" style={{ background: C.surface2 }}>
-          {content?.videoUrl ? (
-            <video src={`${content.videoUrl}#t=0.1`} preload="metadata" muted playsInline className="w-full h-full object-cover pointer-events-none" />
-          ) : (
-            <span className="w-full h-full flex items-center justify-center text-2xl">{content?.kind === 'photo' ? '🖼️' : '🎬'}</span>
-          )}
-          <span className="absolute inset-0 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.25)' }}><span style={{ color: 'white' }} className="text-lg">▶</span></span>
-        </button>
-        <div className="flex-1 min-w-0">
-          <div style={{ color: C.paper }} className="font-semibold text-sm truncate">@{entry.username}{isSelf && <span style={{ color: C.muted }} className="font-normal"> (you)</span>}</div>
-          {content?.title && <div style={{ color: C.paper }} className="text-xs font-medium truncate">{content.title}</div>}
-          <div style={{ color: C.muted }} className="text-xs truncate">{content?.caption}</div>
-          <div style={{ color: C.paper }} className="text-xs font-bold mt-0.5">{voteTotal} vote{voteTotal === 1 ? '' : 's'}</div>
+    <span style={{ width: size, height: size, fontSize: size * 0.5, background: gradient ? `linear-gradient(135deg, ${C.blue}, ${C.pink})` : C.surface2 }} className="rounded-full flex items-center justify-center flex-shrink-0 overflow-hidden">
+      {url && !bad ? <img src={thumbUrl(url, size)} alt="" onError={() => setBad(true)} style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : emoji}
+    </span>
+  );
+}
+function Handle({ accountId }) { const p = useProfile(accountId); return <>@{p ? handleOf(p) : accountId}</>; }
+
+const RESERVED_HANDLES = ['admin', 'krush', 'support', 'official', 'moderator', 'staff', 'help', 'root'];
+function validateHandle(h) {
+  if (h.length < 3) return 'Username must be at least 3 characters.';
+  if (h.length > 20) return 'Username can be at most 20 characters.';
+  if (!/^[a-z0-9_.]+$/.test(h)) return 'Use only lowercase letters, numbers, underscores and periods — no spaces.';
+  if (RESERVED_HANDLES.includes(h)) return 'That username is reserved. Please pick another.';
+  return '';
+}
+async function checkHandleAvailable(handle, accountId) {
+  const lower = handle.toLowerCase();
+  const idx = await sGet(`handle:${lower}`, true);
+  if (idx?.accountId && idx.accountId !== accountId) return false;
+  let keys = [];
+  try { keys = await sList('user:', true); } catch { keys = []; }
+  for (const k of keys) {
+    const name = String(k).replace(/^user:/, '');
+    if (name.toLowerCase() === lower && name !== accountId) return false;
+  }
+  return true;
+}
+function parseDob(m, d, y) {
+  const mm = parseInt(m, 10), dd = parseInt(d, 10), yy = parseInt(y, 10);
+  if (!mm || !dd || !yy || String(y).trim().length !== 4) return { error: 'Enter your full birthdate: month, day and a 4-digit year.' };
+  const dt = new Date(yy, mm - 1, dd);
+  if (yy < 1900 || dt.getFullYear() !== yy || dt.getMonth() !== mm - 1 || dt.getDate() !== dd) return { error: "That birthdate doesn't look right." };
+  const now = new Date();
+  let age = now.getFullYear() - yy;
+  if (now.getMonth() < mm - 1 || (now.getMonth() === mm - 1 && now.getDate() < dd)) age--;
+  if (age < 0) return { error: "That birthdate is in the future." };
+  if (age < 18) return { error: 'KRUSH is for people 18 and older, so this birthdate cannot be saved.' };
+  const p2 = (n) => String(n).padStart(2, '0');
+  return { iso: `${yy}-${p2(mm)}-${p2(dd)}` };
+}
+const SOCIAL_FIELDS = [
+  { k: 'instagram', label: 'Instagram', icon: '📷', ph: 'instagram.com/yourname', hosts: ['instagram.com'] },
+  { k: 'tiktok', label: 'TikTok', icon: '🎵', ph: 'tiktok.com/@yourname', hosts: ['tiktok.com'] },
+  { k: 'facebook', label: 'Facebook', icon: '👍', ph: 'facebook.com/yourname', hosts: ['facebook.com', 'fb.com', 'fb.me'] },
+  { k: 'youtube', label: 'YouTube', icon: '▶️', ph: 'youtube.com/@yourchannel', hosts: ['youtube.com', 'youtu.be'] },
+  { k: 'website', label: 'Website', icon: '🌐', ph: 'yourwebsite.com', hosts: null },
+];
+function normalizeLink(field, raw) {
+  const t = (raw || '').trim();
+  if (!t) return { value: '' };
+  if (t.length > 200) return { error: 'That link is too long.' };
+  const s = /^[a-z][a-z0-9+.-]*:/i.test(t) ? t : `https://${t}`;
+  let u; try { u = new URL(s); } catch { return { error: "That doesn't look like a valid link." }; }
+  if (u.protocol !== 'https:' && u.protocol !== 'http:') return { error: 'Links must start with http:// or https://' };
+  const host = u.hostname.toLowerCase().replace(/^www\./, '');
+  if (!host.includes('.') || host.includes(' ')) return { error: "That doesn't look like a valid link." };
+  if (field.hosts && !field.hosts.some(d => host === d || host.endsWith('.' + d))) return { error: `That doesn't look like a ${field.label} link.` };
+  u.protocol = 'https:';
+  return { value: u.href };
+}
+async function uploadProfilePhoto(blob) {
+  const fd = new FormData();
+  fd.append('file', blob, 'profile.jpg');
+  fd.append('upload_preset', CLOUDINARY_UPLOAD_PRESET);
+  const res = await fetch(`https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/image/upload`, { method: 'POST', body: fd });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.secure_url) throw new Error(data?.error?.message || 'Photo upload failed');
+  return data.secure_url;
+}
+function SocialLinks({ links }) {
+  const items = SOCIAL_FIELDS.filter(f => links?.[f.k]);
+  if (!items.length) return null;
+  return (
+    <div className="flex flex-wrap justify-center gap-2 mt-3">
+      {items.map(f => (
+        <a key={f.k} href={links[f.k]} target="_blank" rel="noopener noreferrer nofollow" style={{ background: C.surface, color: C.paper, border: `1px solid ${C.surface2}` }} className="text-xs font-bold px-3 py-1.5 rounded-full flex items-center gap-1">{f.icon} {f.label}</a>
+      ))}
+    </div>
+  );
+}
+function InterestChips({ interests }) {
+  const list = (interests || []).map(id => INTEREST_OPTIONS.find(o => o.id === id)).filter(Boolean);
+  if (!list.length) return null;
+  return <div className="flex flex-wrap justify-center gap-1.5 mt-3">{list.map(o => <span key={o.id} style={{ background: 'rgba(255,46,126,0.12)', color: C.pink }} className="text-[11px] font-bold px-2.5 py-1 rounded-full">{o.emoji} {o.label}</span>)}</div>;
+}
+
+// Square, circular crop: drag to reposition, slider to zoom. Output is a 512x512 JPEG (uploaded to Cloudinary on Save).
+function PhotoCropper({ file, onCancel, onDone }) {
+  const V = 280;
+  const [img, setImg] = useState(null);
+  const [zoom, setZoom] = useState(1);
+  const [off, setOff] = useState({ x: 0, y: 0 });
+  const [err, setErr] = useState('');
+  const drag = useRef(null);
+  useEffect(() => {
+    const url = URL.createObjectURL(file);
+    const im = new Image();
+    im.onload = () => {
+      const min = Math.max(V / im.naturalWidth, V / im.naturalHeight);
+      setImg(im); setZoom(1);
+      setOff({ x: (V - im.naturalWidth * min) / 2, y: (V - im.naturalHeight * min) / 2 });
+    };
+    im.onerror = () => setErr("We couldn't read that picture. Try a different photo (JPG or PNG).");
+    im.src = url;
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
+  const minScale = img ? Math.max(V / img.naturalWidth, V / img.naturalHeight) : 1;
+  const scale = minScale * zoom;
+  const clamp = (o, s) => ({ x: Math.min(0, Math.max(V - img.naturalWidth * s, o.x)), y: Math.min(0, Math.max(V - img.naturalHeight * s, o.y)) });
+  const changeZoom = (z) => {
+    if (!img) return;
+    const ns = minScale * z;
+    const cx = (V / 2 - off.x) / scale, cy = (V / 2 - off.y) / scale;
+    setZoom(z); setOff(clamp({ x: V / 2 - cx * ns, y: V / 2 - cy * ns }, ns));
+  };
+  const down = (e) => { if (!img) return; try { e.currentTarget.setPointerCapture(e.pointerId); } catch {} drag.current = { sx: e.clientX, sy: e.clientY, ox: off.x, oy: off.y }; };
+  const move = (e) => { const d = drag.current; if (!d || !img) return; setOff(clamp({ x: d.ox + (e.clientX - d.sx), y: d.oy + (e.clientY - d.sy) }, scale)); };
+  const up = () => { drag.current = null; };
+  const confirm = () => {
+    if (!img) return;
+    const c = document.createElement('canvas'); c.width = 512; c.height = 512;
+    const ctx = c.getContext('2d'); ctx.fillStyle = '#000'; ctx.fillRect(0, 0, 512, 512);
+    ctx.drawImage(img, -off.x / scale, -off.y / scale, V / scale, V / scale, 0, 0, 512, 512);
+    c.toBlob(b => { if (b) onDone(b); else setErr('Something went wrong preparing that photo. Please try again.'); }, 'image/jpeg', 0.88);
+  };
+  return (
+    <div className="fixed inset-0 flex flex-col items-center justify-center px-6" style={{ background: 'rgba(0,0,0,0.92)', zIndex: 120 }}>
+      <div style={{ color: C.paper }} className="font-black text-base mb-1">Adjust your photo</div>
+      <div style={{ color: C.muted }} className="text-xs mb-4">Drag to reposition. Use the slider to zoom.</div>
+      {err ? <div style={{ color: C.red }} className="text-sm text-center max-w-xs mb-4">{err}</div> : (
+        <div onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up} style={{ width: V, height: V, touchAction: 'none', background: '#000', border: `2px solid ${C.pink}` }} className="relative rounded-full overflow-hidden">
+          {img && <img src={img.src} alt="" draggable={false} style={{ position: 'absolute', left: off.x, top: off.y, width: img.naturalWidth * scale, height: img.naturalHeight * scale, maxWidth: 'none', userSelect: 'none', pointerEvents: 'none' }} />}
+          {!img && <div style={{ color: C.muted }} className="absolute inset-0 flex items-center justify-center text-xs">Loading…</div>}
         </div>
-        {isSelf ? <span style={{ color: C.muted }} className="text-[10px] font-semibold px-2">Your entry</span> : !live ? (
-          <span style={{ color: C.muted }} className="text-[10px] font-semibold px-2 text-center">Voting has ended<br />for this competition</span>
-        ) : !freeVoteUsed ? (
-          <button onClick={() => onFreeVote(entry)} style={{ background: C.pink, color: 'white' }} className="flex flex-col items-center justify-center px-3 py-2 rounded-lg flex-shrink-0">
-            <Heart size={16} /><span className="text-[10px] font-bold mt-0.5">Free Vote</span>
-          </button>
-        ) : credits > 0 ? (
-          <button onClick={() => onOpenCredits(entry)} style={{ background: 'rgba(255,46,126,0.15)', color: C.pink }} className="flex flex-col items-center justify-center px-3 py-2 rounded-lg flex-shrink-0">
-            <Zap size={16} /><span className="text-[10px] font-bold mt-0.5">Use Credits</span>
-          </button>
-        ) : (
-          <span style={{ color: C.muted }} className="text-[10px] font-semibold px-2 text-center">No credits<br />left</span>
-        )}
-      </div>
-      <div className="flex items-center gap-2">
-        <button onClick={() => onComment(entry)} style={{ background: C.surface2, color: C.paper }} className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold">💬 {commentCount}</button>
-        <button onClick={() => onShare(entry)} style={{ background: C.surface2, color: C.paper }} className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold">↗ Share</button>
+      )}
+      {!err && <input type="range" min="1" max="3" step="0.01" value={zoom} onChange={e => changeZoom(parseFloat(e.target.value))} className="w-64 mt-5" aria-label="Zoom" />}
+      <div className="flex gap-3 mt-6 w-full max-w-xs">
+        <button onClick={onCancel} style={{ color: C.muted, border: `1px solid ${C.surface2}` }} className="flex-1 font-bold py-3 rounded-xl text-sm">Cancel</button>
+        {!err && <button onClick={confirm} disabled={!img} style={{ background: C.blue, color: 'white' }} className="flex-1 font-bold py-3 rounded-xl text-sm">Use This Photo</button>}
       </div>
     </div>
   );
 }
 
-// ---------- FULL-SCREEN VERTICAL VIDEO VIEWER ----------
-// Reuses the competition's existing vote / comment / share handlers (passed in) — it creates no vote or
-// comment records of its own. Order is frozen when opened so swiping isn't scrambled by live vote re-sorting.
-function FeedItemMeta({ entryId, refreshTick, children }) {
-  const [n, setN] = useState(() => mockCommentsFor(entryId).length);
-  useEffect(() => { countTopLevelComments(entryId).then(setN); }, [entryId, refreshTick]);
-  return children(n);
-}
-function FeedVideo({ url, active, near, muted }) {
-  const ref = useRef(null);
-  const [paused, setPaused] = useState(false);
-  const [failed, setFailed] = useState(false);
-  const [buffering, setBuffering] = useState(true);
-  useEffect(() => {
-    const v = ref.current; if (!v) return;
-    if (active) {
-      v.muted = muted;
-      const p = v.play(); if (p && p.catch) p.catch(() => setPaused(true)); // autoplay blocked -> user taps to play
-    } else { v.pause(); try { v.currentTime = 0; } catch {} setPaused(false); }
-  }, [active]);
-  useEffect(() => { if (ref.current) ref.current.muted = muted; }, [muted]);
-  const toggle = () => {
-    const v = ref.current; if (!v) return;
-    if (v.paused) { v.play().then(() => setPaused(false)).catch(() => setPaused(true)); } else { v.pause(); setPaused(true); }
+const fieldBox = { background: C.surface, color: C.paper, border: `1px solid ${C.surface2}`, fontSize: 16 };
+function EditProfileScreen({ user, onCancel, onSaved, onToast }) {
+  const accountId = user.username; // permanent ID — never changes
+  const [displayName, setDisplayName] = useState(user.displayName || '');
+  const [handle, setHandle] = useState(handleOf(user));
+  const [bio, setBio] = useState(user.bio || '');
+  const [location, setLocation] = useState(user.location || '');
+  const [showLocation, setShowLocation] = useState(!!user.showLocation);
+  const [interests, setInterests] = useState(user.interests || []);
+  const [links, setLinks] = useState({ instagram: '', tiktok: '', facebook: '', youtube: '', website: '', ...(user.links || {}) });
+  const [emoji, setEmoji] = useState(user.avatar || '😎');
+  const [photo, setPhoto] = useState(null); // { blob, preview } — chosen but NOT saved until Save Changes
+  const [removePhoto, setRemovePhoto] = useState(false);
+  const [cropFile, setCropFile] = useState(null);
+  const [hasDob, setHasDob] = useState(null); // null = still loading
+  const [dob, setDob] = useState({ m: '', d: '', y: '' });
+  const [errors, setErrors] = useState({});
+  const [saving, setSaving] = useState(false);
+  const topRef = useRef(null);
+  const emojiChoices = ['😎', '🔥', '⭐', '🎯', '🚀', '💥', '🌟', '🎬'];
+  useEffect(() => { let alive = true; sGet(`private:${accountId}`, true).then(p => { if (alive) setHasDob(!!p?.dob); }).catch(() => { if (alive) setHasDob(false); }); return () => { alive = false; }; }, [accountId]);
+  useEffect(() => () => { if (photo?.preview) URL.revokeObjectURL(photo.preview); }, [photo]);
+  const pickFile = (e) => { const f = e.target.files && e.target.files[0]; e.target.value = ''; if (!f) return; if (!/^image\//.test(f.type) && !/\.(jpe?g|png|heic|heif|webp)$/i.test(f.name)) { setErrors(x => ({ ...x, photo: 'Please choose an image file.' })); return; } if (f.size > 15 * 1024 * 1024) { setErrors(x => ({ ...x, photo: 'That photo is too large (15MB max).' })); return; } setErrors(x => ({ ...x, photo: undefined })); setCropFile(f); };
+  const toggleInterest = (id) => setInterests(prev => prev.includes(id) ? prev.filter(x => x !== id) : prev.length >= 6 ? prev : [...prev, id]);
+  const previewProfile = { avatar: emoji, avatarUrl: removePhoto ? null : (photo ? photo.preview : user.avatarUrl) };
+
+  const save = async () => {
+    const errs = {};
+    const dn = displayName.trim();
+    if (!dn) errs.displayName = 'Enter a display name.'; else if (dn.length > 40) errs.displayName = 'Display name can be at most 40 characters.';
+    const hv = handle.trim().replace(/^@/, '');
+    const handleChanged = hv !== handleOf(user);
+    if (handleChanged) { const e = validateHandle(hv.toLowerCase()); if (e) errs.handle = e; }
+    if (bio.length > 160) errs.bio = 'Bio can be at most 160 characters.';
+    else if (bio.split('\n').length > 4) errs.bio = 'Bio can have at most 4 lines.';
+    if (location.trim().length > 60) errs.location = 'Location can be at most 60 characters.';
+    if (interests.length < 1) errs.interests = 'Pick at least one interest.';
+    const cleanLinks = {}; const linkErrs = {};
+    for (const f of SOCIAL_FIELDS) { const r = normalizeLink(f, links[f.k]); if (r.error) linkErrs[f.k] = r.error; else if (r.value) cleanLinks[f.k] = r.value; }
+    if (Object.keys(linkErrs).length) errs.links = linkErrs;
+    let dobIso = null;
+    if (!hasDob && (dob.m || dob.d || dob.y)) { const r = parseDob(dob.m, dob.d, dob.y); if (r.error) errs.dob = r.error; else dobIso = r.iso; }
+    if (Object.keys(errs).length) { setErrors(errs); if (topRef.current) topRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
+    setErrors({}); setSaving(true);
+    try {
+      const newHandle = handleChanged ? hv.toLowerCase() : null;
+      if (handleChanged) {
+        const ok = await checkHandleAvailable(newHandle, accountId);
+        if (!ok) { setErrors({ handle: 'That username is already taken. Try another.' }); setSaving(false); return; }
+        await sSet(`handle:${newHandle}`, { accountId }, true);
+      }
+      let avatarUrl = user.avatarUrl || null;
+      if (removePhoto) avatarUrl = null;
+      if (photo) avatarUrl = await uploadProfilePhoto(photo.blob);
+      const fresh = (await sGet(`user:${accountId}`, true)) || user;
+      const updated = { ...fresh, username: accountId, displayName: dn, bio: bio.trim(), avatar: emoji, avatarUrl, location: location.trim(), showLocation: !!location.trim() && showLocation, interests, links: cleanLinks, updatedAt: Date.now() };
+      if (newHandle) updated.handle = newHandle;
+      await sSet(`user:${accountId}`, updated, true);
+      if (dobIso) { await sSet(`private:${accountId}`, { dob: dobIso, savedAt: Date.now() }, true); }
+      cacheProfile(updated);
+      onToast('✅ Profile saved!');
+      onSaved(updated);
+    } catch (e) {
+      setSaving(false);
+      setErrors({ general: photo && /upload|preset|network|fetch/i.test(String(e?.message || e)) ? `Your photo couldn't be uploaded (${e.message || 'network error'}). Nothing was saved — please try again.` : `Something went wrong saving your profile (${e?.message || 'unknown error'}). Please try again.` });
+      if (topRef.current) topRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
   };
-  if (!near) return <div className="absolute inset-0 flex items-center justify-center" style={{ background: '#000' }}><span className="text-4xl">🎬</span></div>;
-  if (failed) return <div className="absolute inset-0 flex flex-col items-center justify-center gap-2" style={{ background: '#000', color: C.muted }}><span className="text-4xl">⚠️</span><span className="text-xs px-8 text-center">This video couldn't be played. Check your connection and try again.</span><button onClick={() => { setFailed(false); setBuffering(true); }} style={{ background: C.surface2, color: C.paper }} className="px-4 py-2 rounded-lg text-xs font-bold">Retry</button></div>;
+  const Err = ({ k }) => errors[k] ? <div style={{ color: C.red }} className="text-xs mt-1.5">{errors[k]}</div> : null;
+  const Label = ({ children }) => <div style={{ color: C.paper }} className="text-sm font-bold mb-1.5 mt-5">{children}</div>;
   return (
-    <div className="absolute inset-0" style={{ background: '#000' }} onClick={toggle}>
-      <video ref={ref} src={url} loop playsInline muted={muted} preload={active ? 'auto' : 'metadata'}
-        onError={() => setFailed(true)} onWaiting={() => setBuffering(true)} onCanPlay={() => setBuffering(false)} onPlaying={() => { setBuffering(false); setPaused(false); }}
-        className="w-full h-full" style={{ objectFit: 'contain' }} />
-      {active && buffering && !paused && <div className="absolute inset-0 flex items-center justify-center pointer-events-none"><div className="w-8 h-8 rounded-full border-2 animate-spin" style={{ borderColor: 'rgba(255,255,255,0.3)', borderTopColor: 'white' }} /></div>}
-      {paused && <div className="absolute inset-0 flex items-center justify-center pointer-events-none"><span style={{ background: 'rgba(0,0,0,0.5)', color: 'white' }} className="w-16 h-16 rounded-full flex items-center justify-center text-3xl">▶</span></div>}
+    <div className="pb-28">
+      <TopBar title="Edit Profile" onBack={onCancel} />
+      <div ref={topRef} className="px-4 pt-4">
+        {errors.general && <div style={{ background: 'rgba(255,77,77,0.12)', color: C.red, border: `1px solid ${C.red}` }} className="text-xs font-semibold rounded-lg px-3 py-2 mb-3">{errors.general}</div>}
+
+        <div className="flex flex-col items-center">
+          <Avatar profile={previewProfile} size={96} gradient />
+          <div className="flex flex-wrap justify-center gap-2 mt-3">
+            <label style={{ background: C.blue, color: 'white' }} className="text-xs font-bold px-4 py-2.5 rounded-lg cursor-pointer">📁 Choose Photo<input type="file" accept="image/*" onChange={pickFile} className="hidden" /></label>
+            <label style={{ background: C.surface2, color: C.paper }} className="text-xs font-bold px-4 py-2.5 rounded-lg cursor-pointer">📸 Take Photo<input type="file" accept="image/*" capture="user" onChange={pickFile} className="hidden" /></label>
+            {(photo || (user.avatarUrl && !removePhoto)) && <button onClick={() => { setPhoto(null); setRemovePhoto(true); }} style={{ color: C.red, border: `1px solid ${C.surface2}` }} className="text-xs font-bold px-4 py-2.5 rounded-lg">Remove Photo</button>}
+          </div>
+          {photo && <div style={{ color: C.muted }} className="text-[11px] mt-2">New photo ready — it will be saved when you tap Save Changes.</div>}
+          <Err k="photo" />
+          <div style={{ color: C.muted }} className="text-[11px] mt-4 mb-1.5">No photo? Pick an avatar:</div>
+          <div className="flex gap-2 flex-wrap justify-center">{emojiChoices.map(a => <button key={a} onClick={() => setEmoji(a)} style={{ background: emoji === a ? C.blue : C.surface, border: emoji === a ? `2px solid ${C.blue}` : `1px solid ${C.surface2}` }} className="w-11 h-11 rounded-full text-xl flex items-center justify-center">{a}</button>)}</div>
+        </div>
+
+        <Label>Display name</Label>
+        <input value={displayName} onChange={e => setDisplayName(e.target.value)} maxLength={60} placeholder="Sunni Dai" style={fieldBox} className="w-full rounded-lg px-4 py-3.5 outline-none" /><Err k="displayName" />
+        <div style={{ color: C.muted }} className="text-[11px] mt-1">Shown prominently on your profile. Spaces are fine.</div>
+
+        <Label>Username</Label>
+        <div className="relative"><span style={{ color: C.muted }} className="absolute left-4 top-1/2 -translate-y-1/2">@</span><input value={handle} onChange={e => setHandle(e.target.value.replace(/\s/g, ''))} maxLength={30} autoCapitalize="none" autoCorrect="off" placeholder="sunnidai" style={{ ...fieldBox, paddingLeft: 32 }} className="w-full rounded-lg pr-4 py-3.5 outline-none" /></div><Err k="handle" />
+        <div style={{ color: C.muted }} className="text-[11px] mt-1">3–20 characters: lowercase letters, numbers, _ and . Changing it keeps all your entries, votes, comments and wallet.</div>
+
+        <Label>Bio</Label>
+        <textarea value={bio} onChange={e => setBio(e.target.value)} rows={3} placeholder="Detroit singer chasing my dreams! 🎤" style={fieldBox} className="w-full rounded-lg px-4 py-3 outline-none resize-none" />
+        <div className="flex justify-between"><Err k="bio" /><div style={{ color: bio.length > 160 ? C.red : C.muted }} className="text-[11px] mt-1 ml-auto">{bio.length}/160</div></div>
+
+        <Label>Location <span style={{ color: C.muted }} className="font-normal">(optional)</span></Label>
+        <input value={location} onChange={e => setLocation(e.target.value)} maxLength={80} placeholder="Detroit, Michigan" style={fieldBox} className="w-full rounded-lg px-4 py-3.5 outline-none" /><Err k="location" />
+        <label className="flex items-center gap-2 mt-2.5"><input type="checkbox" checked={showLocation} onChange={e => setShowLocation(e.target.checked)} style={{ width: 20, height: 20 }} /><span style={{ color: C.paper }} className="text-xs">Show this city/region on my public profile</span></label>
+        <div style={{ color: C.muted }} className="text-[11px] mt-1">Only what you type here — KRUSH never reads your device location.</div>
+
+        <Label>Interests <span style={{ color: C.muted }} className="font-normal">({interests.length}/6)</span></Label>
+        <div className="grid grid-cols-3 gap-2">
+          {INTEREST_OPTIONS.map(o => { const on = interests.includes(o.id); return <button key={o.id} onClick={() => toggleInterest(o.id)} style={{ background: on ? `linear-gradient(135deg, ${C.blue}, ${C.pink})` : C.surface, border: on ? `2px solid ${C.pink}` : `1px solid ${C.surface2}`, color: on ? 'white' : C.paper }} className="rounded-xl py-3 flex flex-col items-center gap-1 text-[11px] font-bold"><span className="text-xl">{o.emoji}</span>{o.label}</button>; })}
+        </div>
+        <Err k="interests" />
+        <div style={{ color: C.muted }} className="text-[11px] mt-1">These also personalize your For You feed.</div>
+
+        <Label>Social links <span style={{ color: C.muted }} className="font-normal">(optional)</span></Label>
+        <div className="flex flex-col gap-2.5">
+          {SOCIAL_FIELDS.map(f => (
+            <div key={f.k}>
+              <input value={links[f.k]} onChange={e => setLinks({ ...links, [f.k]: e.target.value })} placeholder={`${f.icon} ${f.label}: ${f.ph}`} autoCapitalize="none" autoCorrect="off" inputMode="url" style={fieldBox} className="w-full rounded-lg px-4 py-3.5 outline-none" />
+              {errors.links?.[f.k] && <div style={{ color: C.red }} className="text-xs mt-1">{errors.links[f.k]}</div>}
+            </div>
+          ))}
+        </div>
+
+        <div style={{ background: C.surface, border: `1px solid ${C.surface2}` }} className="rounded-xl p-4 mt-6">
+          <div style={{ color: C.paper }} className="text-sm font-bold">🔒 Private information</div>
+          <div style={{ color: C.muted }} className="text-[11px] mt-0.5 mb-3">Only you can see this. It is never shown on your public profile, in competitions, or in share links.</div>
+          <div style={{ color: C.paper }} className="text-xs font-bold mb-1.5">Date of birth (KRUSH is 18+)</div>
+          {hasDob === null ? <div style={{ color: C.muted }} className="text-xs">Loading…</div> : hasDob ? (
+            <div style={{ color: C.green }} className="text-xs font-semibold">✓ Birthdate on file and private. For safety it can't be changed here.</div>
+          ) : (
+            <>
+              <div className="flex gap-2">
+                <input value={dob.m} onChange={e => setDob({ ...dob, m: e.target.value.replace(/\D/g, '').slice(0, 2) })} inputMode="numeric" placeholder="MM" style={fieldBox} className="w-1/4 rounded-lg px-3 py-3.5 outline-none text-center" />
+                <input value={dob.d} onChange={e => setDob({ ...dob, d: e.target.value.replace(/\D/g, '').slice(0, 2) })} inputMode="numeric" placeholder="DD" style={fieldBox} className="w-1/4 rounded-lg px-3 py-3.5 outline-none text-center" />
+                <input value={dob.y} onChange={e => setDob({ ...dob, y: e.target.value.replace(/\D/g, '').slice(0, 4) })} inputMode="numeric" placeholder="YYYY" style={fieldBox} className="flex-1 rounded-lg px-3 py-3.5 outline-none text-center" />
+              </div>
+              <Err k="dob" />
+              <div style={{ color: C.muted }} className="text-[11px] mt-1.5">Optional for now. Once saved it can't be edited here.</div>
+            </>
+          )}
+        </div>
+      </div>
+      <div style={{ background: C.ink, borderTop: `1px solid ${C.surface2}` }} className="px-4 py-3 sticky bottom-0 flex gap-3">
+        <button onClick={onCancel} disabled={saving} style={{ color: C.muted, border: `1px solid ${C.surface2}` }} className="flex-1 font-bold py-3.5 rounded-xl text-sm">Cancel</button>
+        <button onClick={save} disabled={saving} style={{ background: C.blue, color: 'white', opacity: saving ? 0.7 : 1 }} className="flex-[2] font-bold py-3.5 rounded-xl text-sm">{saving ? 'Saving…' : 'Save Changes'}</button>
+      </div>
+      {cropFile && <PhotoCropper file={cropFile} onCancel={() => setCropFile(null)} onDone={(blob) => { if (photo?.preview) URL.revokeObjectURL(photo.preview); setPhoto({ blob, preview: URL.createObjectURL(blob) }); setRemovePhoto(false); setCropFile(null); }} />}
     </div>
   );
 }
-function VideoFeedViewer({ order, startIndex, entries, contents, voteTotals, comp, user, live, freeVoteUsed, credits, statusText, commentsTick, onFreeVote, onOpenCredits, onComment, onShare, onClose }) {
-  const items = order.map(id => entries.find(e => e.id === id)).filter(Boolean);
-  const scroller = useRef(null);
-  const [active, setActive] = useState(startIndex);
-  const [muted, setMuted] = useState(true); // browsers only allow autoplay when muted; user can unmute with one tap
-  const [avatars, setAvatars] = useState({});
+
+// Public view of someone else's (or your own) profile. Only explicitly public fields are rendered —
+// never email, birthdate, wallet, or settings.
+function PublicProfileScreen({ accountId, viewerId, onClose }) {
+  const [p, setP] = useState(undefined); // undefined = loading, null = no profile
+  const [stats, setStats] = useState(null);
   useEffect(() => {
-    const el = scroller.current; if (!el) return;
-    el.scrollTop = startIndex * el.clientHeight;
-  }, []);
-  useEffect(() => {
+    let alive = true;
     (async () => {
-      const m = {};
-      for (const e of items) { const u = await sGet(`user:${e.username}`, true); if (u?.avatar && typeof u.avatar === 'string' && u.avatar.length <= 8) m[e.username] = u.avatar; }
-      setAvatars(m);
+      const prof = await getProfile(accountId, true);
+      if (!alive) return; setP(prof);
+      if (!prof) return;
+      let entries = [], contents = [], comps = [];
+      try { entries = (await sGetMany(await sList('entry:', true), true)).filter(e => e.username === accountId); } catch {}
+      try { contents = (await sGetMany(await sList('content:', true), true)).filter(c => c.username === accountId); } catch {}
+      try { comps = await sGetMany(await sList('comp:', true), true); } catch {}
+      const ids = new Set(entries.map(e => e.id));
+      const wins = comps.filter(c => c.status === 'ended' && c.winnerEntryId && ids.has(c.winnerEntryId)).length;
+      if (alive) setStats({ wins, entries: entries.length, uploads: contents.length });
     })();
-  }, [order.join(',')]);
-  const onScroll = () => {
-    const el = scroller.current; if (!el || !el.clientHeight) return;
-    const i = Math.round(el.scrollTop / el.clientHeight);
-    if (i !== active && i >= 0 && i < items.length) setActive(i);
-  };
+    return () => { alive = false; };
+  }, [accountId]);
   return (
-    <div className="fixed inset-0 z-40 flex flex-col" style={{ background: '#000' }}>
-      <div ref={scroller} onScroll={onScroll} className="absolute inset-0 overflow-y-scroll" style={{ scrollSnapType: 'y mandatory', overscrollBehavior: 'contain', WebkitOverflowScrolling: 'touch' }}>
-        {items.map((e, i) => {
-          const c = contents[e.contentId];
-          const isSelf = e.username === user.username;
-          return (
-            <div key={e.id} className="relative w-full" style={{ height: '100%', minHeight: '100%', scrollSnapAlign: 'start', scrollSnapStop: 'always' }}>
-              {c?.videoUrl ? <FeedVideo url={c.videoUrl} active={i === active} near={Math.abs(i - active) <= 1} muted={muted} />
-                : <div className="absolute inset-0 flex flex-col items-center justify-center gap-3" style={{ background: `linear-gradient(160deg, ${C.surface2}, ${C.ink})` }}><span className="text-6xl">🎬</span><span style={{ color: C.muted }} className="text-xs px-10 text-center">Demo entry — no video attached</span></div>}
-              <div className="absolute left-0 right-0 bottom-0 pointer-events-none" style={{ height: '45%', background: 'linear-gradient(to top, rgba(0,0,0,0.75), rgba(0,0,0,0))' }} />
-              <div className="absolute left-4 right-20 bottom-6 pointer-events-none">
-                <div className="flex items-center gap-2 mb-1">
-                  <span style={{ background: C.surface2 }} className="w-9 h-9 rounded-full flex items-center justify-center text-lg">{avatars[e.username] || '🙂'}</span>
-                  <span style={{ color: 'white' }} className="font-bold text-sm">@{e.username}{isSelf && ' (you)'}</span>
-                </div>
-                {c?.caption && <div style={{ color: 'white' }} className="text-sm mb-1 line-clamp-2">{c.caption}</div>}
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span style={{ background: 'rgba(46,91,255,0.85)', color: 'white' }} className="text-[10px] font-bold px-2 py-0.5 rounded-full">{CAT_EMOJI[comp.category]} {comp.category}</span>
-                  <span style={{ background: 'rgba(0,0,0,0.55)', color: C.pink }} className="text-[10px] font-bold px-2 py-0.5 rounded-full">{statusText}</span>
-                </div>
+    <div className="fixed inset-0 overflow-y-auto" style={{ background: C.ink, zIndex: 90 }}>
+      <div className="max-w-md mx-auto pb-10">
+        <TopBar title="Profile" onBack={onClose} />
+        {p === undefined ? <Spinner /> : p === null ? <EmptyState text="This is a demo contestant, so there's no KRUSH profile to show." /> : (
+          <div className="px-4 pt-5 flex flex-col items-center text-center">
+            <Avatar profile={p} size={96} gradient />
+            <div style={{ color: C.paper }} className="font-black text-xl mt-3">{p.displayName || handleOf(p)}</div>
+            <div style={{ color: C.muted }} className="text-sm">@{handleOf(p)}{viewerId === accountId && <span> (you)</span>}</div>
+            {p.bio && <div style={{ color: C.paper }} className="text-sm mt-2 max-w-xs whitespace-pre-wrap">{p.bio}</div>}
+            {p.showLocation && p.location && <div style={{ color: C.muted }} className="text-xs mt-2">📍 {p.location}</div>}
+            <InterestChips interests={p.interests} />
+            <SocialLinks links={p.links} />
+            {stats && (
+              <div className="flex gap-6 mt-5">
+                <Stat label="Wins" value={stats.wins} color={C.amber} />
+                <Stat label="Entries" value={stats.entries} color={C.pink} />
+                <Stat label="Uploads" value={stats.uploads} color={C.blue} />
               </div>
-              <FeedItemMeta entryId={e.id} refreshTick={commentsTick}>{(n) => (
-                <div className="absolute right-3 bottom-8 flex flex-col items-center gap-4">
-                  <div className="flex flex-col items-center">
-                    {isSelf ? <span style={{ background: 'rgba(0,0,0,0.55)', color: C.muted }} className="w-12 h-12 rounded-full flex items-center justify-center text-[9px] font-bold text-center leading-tight">Your<br />entry</span>
-                      : !live ? <span style={{ background: 'rgba(0,0,0,0.55)', color: C.muted }} className="w-12 h-12 rounded-full flex items-center justify-center text-[9px] font-bold text-center leading-tight">Voting<br />ended</span>
-                      : !freeVoteUsed ? <button onClick={() => onFreeVote(e)} style={{ background: C.pink, color: 'white' }} className="w-12 h-12 rounded-full flex items-center justify-center"><Heart size={22} /></button>
-                      : credits > 0 ? <button onClick={() => onOpenCredits(e)} style={{ background: 'rgba(255,46,126,0.85)', color: 'white' }} className="w-12 h-12 rounded-full flex items-center justify-center"><Zap size={22} /></button>
-                      : <span style={{ background: 'rgba(0,0,0,0.55)', color: C.muted }} className="w-12 h-12 rounded-full flex items-center justify-center text-[9px] font-bold text-center leading-tight">No<br />credits</span>}
-                    <span style={{ color: 'white' }} className="text-xs font-bold mt-1">{voteTotals[e.id] || 0}</span>
-                  </div>
-                  <div className="flex flex-col items-center">
-                    <button onClick={() => onComment(e)} style={{ background: 'rgba(0,0,0,0.55)', color: 'white' }} className="w-12 h-12 rounded-full flex items-center justify-center text-xl">💬</button>
-                    <span style={{ color: 'white' }} className="text-xs font-bold mt-1">{n}</span>
-                  </div>
-                  <div className="flex flex-col items-center">
-                    <button onClick={() => onShare(e)} style={{ background: 'rgba(0,0,0,0.55)', color: 'white' }} className="w-12 h-12 rounded-full flex items-center justify-center text-xl">↗</button>
-                    <span style={{ color: 'white' }} className="text-xs font-bold mt-1">Share</span>
-                  </div>
-                </div>
-              )}</FeedItemMeta>
-            </div>
-          );
-        })}
+            )}
+          </div>
+        )}
       </div>
-      <button onClick={onClose} aria-label="Close" style={{ background: 'rgba(0,0,0,0.55)', color: 'white', top: 'max(12px, env(safe-area-inset-top))' }} className="absolute left-3 w-10 h-10 rounded-full flex items-center justify-center"><ChevronLeft size={22} /></button>
-      <button onClick={() => setMuted(m => !m)} aria-label={muted ? 'Unmute' : 'Mute'} style={{ background: 'rgba(0,0,0,0.55)', color: 'white', top: 'max(12px, env(safe-area-inset-top))' }} className="absolute right-3 h-10 px-3 rounded-full flex items-center justify-center text-xs font-bold">{muted ? '🔇 Tap for sound' : '🔊'}</button>
-      <div style={{ color: 'rgba(255,255,255,0.7)', top: 'max(20px, calc(env(safe-area-inset-top) + 8px))' }} className="absolute left-0 right-0 text-center text-xs font-semibold pointer-events-none">{active + 1} / {items.length}</div>
+    </div>
+  );
+}
+
+// ---------- COMPETITION FEED POST ----------
+// Large, full-width post for one competition entry — same card shape as the homepage FeedPostCard
+// (avatar + @username, caption, big video, action row) but wired to the REAL entry/content records and the
+// competition's existing vote / comment / share handlers (passed in). It creates no records of its own.
+function CompetitionFeedPost({ entry, content, rank, voteTotal, isSelf, isEnded, live, freeVoteUsed, credits, muted, onSetMuted, onFreeVote, onOpenCredits, onComment, onShare, onOpenProfile, refreshTick }) {
+  const [commentCount, setCommentCount] = useState(() => mockCommentsFor(entry.id).length);
+  useEffect(() => { countTopLevelComments(entry.id).then(setCommentCount); }, [entry.id, refreshTick]);
+  const prof = useProfile(entry.username);
+  const boxRef = useRef(null);
+  const vidRef = useRef(null);
+  const mutedRef = useRef(muted);
+  const userPausedRef = useRef(false);
+  const [failed, setFailed] = useState(false);
+  const [playing, setPlaying] = useState(false);
+  const [buffering, setBuffering] = useState(false);
+  const [progress, setProgress] = useState(0);
+  useEffect(() => { mutedRef.current = muted; if (vidRef.current) vidRef.current.muted = muted; }, [muted]);
+  // Autoplay the post that is mostly on screen; pause + rewind it when it scrolls away.
+  // Browsers (iPhone Safari especially) only allow autoplay WITH SOUND after a tap, so playback starts muted
+  // and one tap on the sound button turns sound on for every video. If sound is refused, we fall back to muted.
+  useEffect(() => {
+    const box = boxRef.current, v = vidRef.current;
+    if (!box || !v || typeof IntersectionObserver === 'undefined') return undefined;
+    const start = () => {
+      v.muted = mutedRef.current;
+      const p = v.play();
+      if (p && p.catch) p.catch(() => {
+        if (!v.muted) { v.muted = true; onSetMuted && onSetMuted(true); const p2 = v.play(); if (p2 && p2.catch) p2.catch(() => setPlaying(false)); }
+        else setPlaying(false);
+      });
+    };
+    const io = new IntersectionObserver(([en]) => {
+      if (en.isIntersecting && en.intersectionRatio >= 0.6) { if (!userPausedRef.current) start(); }
+      else { v.pause(); userPausedRef.current = false; try { v.currentTime = 0; } catch {} }
+    }, { threshold: [0, 0.25, 0.6, 0.9] });
+    io.observe(box);
+    return () => { io.disconnect(); v.pause(); };
+  }, [content?.videoUrl, failed]);
+  // Never more than one video playing.
+  const onPlay = (ev) => { document.querySelectorAll('video[data-feedvid]').forEach(x => { if (x !== ev.currentTarget) x.pause(); }); };
+  const toggle = () => {
+    const v = vidRef.current; if (!v) return;
+    if (v.paused) { userPausedRef.current = false; v.muted = mutedRef.current; const p = v.play(); if (p && p.catch) p.catch(() => setPlaying(false)); }
+    else { userPausedRef.current = true; v.pause(); }
+  };
+  const medal = isEnded && rank <= 3 ? ['🥇', '🥈', '🥉'][rank - 1] : null;
+  return (
+    <div style={{ background: C.surface }} className="rounded-2xl overflow-hidden">
+      <div className="flex items-center gap-2 px-3 pt-3 pb-2">
+        <button onClick={() => onOpenProfile && onOpenProfile(entry.username)} aria-label="Open profile" className="flex items-center gap-2 min-w-0 text-left">
+          <Avatar profile={prof} size={36} />
+          <span className="min-w-0">
+            {prof?.displayName && <span style={{ color: C.paper }} className="block text-sm font-bold truncate">{prof.displayName}{isSelf && <span style={{ color: C.muted }} className="font-normal"> (you)</span>}</span>}
+            <span style={{ color: prof?.displayName ? C.muted : C.paper }} className={`block truncate ${prof?.displayName ? 'text-xs' : 'text-sm font-bold'}`}>@{prof ? handleOf(prof) : entry.username}{isSelf && !prof?.displayName && <span style={{ color: C.muted }} className="font-normal"> (you)</span>}</span>
+          </span>
+        </button>
+      </div>
+      {(content?.title || content?.caption) && (
+        <div className="px-3 pb-2">
+          {content?.title && <div style={{ color: C.paper }} className="text-sm font-semibold">{content.title}</div>}
+          {content?.caption && <div style={{ color: C.paper }} className="text-sm">{content.caption}</div>}
+        </div>
+      )}
+      {content?.videoUrl && !failed ? (
+        <div ref={boxRef} onClick={toggle} className="relative w-full flex items-center justify-center" style={{ background: '#000', minHeight: 240 }}>
+          <video ref={vidRef} data-feedvid="1" src={`${content.videoUrl}#t=0.1`} loop muted={muted} playsInline preload="metadata"
+            onPlay={onPlay} onPlaying={() => { setPlaying(true); setBuffering(false); }} onPause={() => setPlaying(false)} onWaiting={() => setBuffering(true)} onCanPlay={() => setBuffering(false)}
+            onTimeUpdate={(e) => { const d = e.currentTarget.duration; if (d && isFinite(d)) setProgress(e.currentTarget.currentTime / d); }}
+            onError={() => setFailed(true)}
+            className="w-full block" style={{ maxHeight: '78vh', objectFit: 'contain', background: '#000' }} />
+          {buffering && <div className="absolute inset-0 flex items-center justify-center pointer-events-none"><div className="w-8 h-8 rounded-full border-2 animate-spin" style={{ borderColor: 'rgba(255,255,255,0.3)', borderTopColor: 'white' }} /></div>}
+          {!playing && !buffering && <div className="absolute inset-0 flex items-center justify-center pointer-events-none"><span style={{ background: 'rgba(0,0,0,0.5)', color: 'white' }} className="w-16 h-16 rounded-full flex items-center justify-center text-3xl">▶</span></div>}
+          <button onClick={(e) => { e.stopPropagation(); onSetMuted && onSetMuted(!muted); }} aria-label={muted ? 'Turn sound on' : 'Turn sound off'} style={{ background: 'rgba(0,0,0,0.6)', color: 'white' }} className="absolute top-2 right-2 h-9 px-3 rounded-full text-xs font-bold flex items-center">{muted ? '🔇 Tap for sound' : '🔊'}</button>
+          <div className="absolute left-0 right-0 bottom-0 h-1" style={{ background: 'rgba(255,255,255,0.15)' }}><div style={{ width: `${Math.round(progress * 100)}%`, background: C.pink }} className="h-full" /></div>
+        </div>
+      ) : content?.videoUrl && failed ? (
+        <div style={{ background: '#000', color: C.muted }} className="w-full aspect-video flex flex-col items-center justify-center gap-2">
+          <span className="text-3xl">⚠️</span>
+          <span className="text-xs px-8 text-center">This video couldn't be played. Check your connection and try again.</span>
+          <button onClick={() => setFailed(false)} style={{ background: C.surface2, color: C.paper }} className="px-4 py-2 rounded-lg text-xs font-bold">Retry</button>
+        </div>
+      ) : (
+        <div style={{ background: `linear-gradient(135deg, ${C.surface2}, ${C.ink})`, color: C.muted }} className="w-full aspect-video flex flex-col items-center justify-center gap-2">
+          <span className="text-5xl">{content?.kind === 'photo' ? '🖼️' : '🎬'}</span>
+          <span className="text-xs">Demo entry — no video attached</span>
+        </div>
+      )}
+      <div className="p-3">
+        <div className="flex items-center justify-between mb-2.5">
+          <span style={{ color: C.amber }} className="text-xs font-black uppercase tracking-wide">🏆 {isEnded ? 'Final' : 'Current'} Rank: {medal || ''} #{rank}</span>
+          <span style={{ color: C.paper }} className="text-xs font-black uppercase">❤️ {voteTotal} vote{voteTotal === 1 ? '' : 's'}</span>
+        </div>
+        <div className="flex items-center gap-2">
+          {isSelf ? <span style={{ background: C.surface2, color: C.muted }} className="flex-1 text-center py-3 rounded-lg text-xs font-bold">Your entry</span>
+            : !live ? <span style={{ background: C.surface2, color: C.muted }} className="flex-1 text-center py-3 rounded-lg text-xs font-bold">Voting has ended</span>
+            : !freeVoteUsed ? <button onClick={() => onFreeVote(entry)} style={{ background: C.pink, color: 'white' }} className="flex-1 flex items-center justify-center gap-1 py-3 rounded-lg text-xs font-bold"><Heart size={14} /> Free Vote</button>
+            : credits > 0 ? <button onClick={() => onOpenCredits(entry)} style={{ background: 'rgba(255,46,126,0.15)', color: C.pink }} className="flex-1 flex items-center justify-center gap-1 py-3 rounded-lg text-xs font-bold"><Zap size={14} /> Use Credits</button>
+            : <span style={{ background: C.surface2, color: C.muted }} className="flex-1 text-center py-3 rounded-lg text-xs font-bold">No credits left</span>}
+          <button onClick={() => onComment(entry)} style={{ background: C.surface2, color: C.paper }} className="px-4 py-3 rounded-lg text-xs font-bold flex items-center gap-1">💬 {commentCount}</button>
+          <button onClick={() => onShare(entry)} style={{ background: C.surface2, color: C.paper }} className="px-4 py-3 rounded-lg text-xs font-bold">↗ Share</button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1290,7 +1631,8 @@ function CompetitionDetail({ comp: compProp, user, onBack, onToast, onCompUpdate
   const [commentsTick, setCommentsTick] = useState(0);
   const closeComments = () => { setCommentsFor(null); setCommentsTick(t => t + 1); };
   const [shareForEntry, setShareForEntry] = useState(null);
-  const [viewer, setViewer] = useState(null); // { order: [entryIds], startIndex }
+  const [feedMuted, setFeedMuted] = useState(true); // one sound setting shared by every video in the feed
+  const [profileFor, setProfileFor] = useState(null); // permanent account ID whose public profile is open
   const [celebrate, setCelebrate] = useState(false);
   const [role, setRole] = useState(null); // null | 'viewer' | 'competitor'
   const [phase, setPhase] = useState('preview'); // preview | confirm | uploading | main
@@ -1743,8 +2085,7 @@ function CompetitionDetail({ comp: compProp, user, onBack, onToast, onCompUpdate
   const viewAfterEntering = () => {
     setEnteredSuccess(false);
     onToast(`✓ Officially entered! $${currentEntryFee()} added to the prize pot. (Prototype only — no real charge was made.)`);
-    setPhase('main');
-    setShareOpen(true);
+    setPhase('main'); // land straight in the competition video feed (Share My Entry stays available in the header)
     load();
   };
 
@@ -1842,8 +2183,8 @@ function CompetitionDetail({ comp: compProp, user, onBack, onToast, onCompUpdate
             <div className="flex flex-wrap gap-2 mb-4">
               {entries.map(e => (
                 <div key={e.id} style={{ background: C.surface }} className="rounded-full pl-1 pr-3 py-1 flex items-center gap-2">
-                  <span style={{ background: C.surface2 }} className="w-6 h-6 rounded-full flex items-center justify-center text-xs">🙂</span>
-                  <span style={{ color: C.paper }} className="text-xs font-semibold">@{e.username}</span>
+                  <Avatar profile={null} size={24} />
+                  <span style={{ color: C.paper }} className="text-xs font-semibold"><Handle accountId={e.username} /></span>
                 </div>
               ))}
             </div>
@@ -2126,7 +2467,7 @@ function CompetitionDetail({ comp: compProp, user, onBack, onToast, onCompUpdate
                   return (
                     <div key={eid} className="flex items-center gap-2">
                       <span className="text-lg">{medal[i]}</span>
-                      <span style={{ color: C.paper }} className="text-sm font-semibold">@{e.username}</span>
+                      <span style={{ color: C.paper }} className="text-sm font-semibold"><Handle accountId={e.username} /></span>
                       <span style={{ color: C.muted }} className="text-xs ml-auto">{voteTotals[eid] || 0} votes</span>
                     </div>
                   );
@@ -2150,30 +2491,24 @@ function CompetitionDetail({ comp: compProp, user, onBack, onToast, onCompUpdate
           </div>
         )}
 
-        <SectionLabel text={`Contestants (${entries.length})`} />
+        <SectionLabel text={`Competition Video Feed (${entries.length})`} />
         {!isEnded && (
           <div style={{ color: C.muted }} className="text-xs mb-2">
             {freeVoteUsed ? `Free vote used. ${credits} voting credit${credits === 1 ? '' : 's'} remaining.` : 'You have 1 free vote and 10 test credits for this competition.'}
           </div>
         )}
         {entries.length === 0 ? <EmptyState text="No one has entered this competition yet." /> : (
-          <div className="flex flex-col gap-2">
+          <div className="flex flex-col gap-4">
             {sorted.map((e, i) => (
-              <div key={e.id} className="relative">
-                {!isEnded && <span style={{ color: C.muted }} className="absolute -left-1 -top-1 text-[10px] font-bold">#{i + 1}</span>}
-                <EntryRow entry={e} content={contents[e.contentId]} voteTotal={voteTotals[e.id] || 0} refreshTick={commentsTick}
-                  isSelf={e.username === user.username} live={comp.status !== 'ended'} freeVoteUsed={freeVoteUsed} credits={credits}
-                  onFreeVote={castFreeVote} onOpenCredits={(entry) => setCreditEntry(entry)}
-                  onComment={(entry) => setCommentsFor(entry)} onShare={(entry) => setShareForEntry(entry)}
-                  onOpenViewer={(entry) => setViewer({ order: sorted.map(x => x.id), startIndex: Math.max(0, sorted.findIndex(x => x.id === entry.id)) })} />
-              </div>
+              <CompetitionFeedPost key={e.id} entry={e} content={contents[e.contentId]} rank={i + 1} voteTotal={voteTotals[e.id] || 0} refreshTick={commentsTick}
+                isSelf={e.username === user.username} isEnded={isEnded} live={comp.status !== 'ended'} freeVoteUsed={freeVoteUsed} credits={credits} muted={feedMuted} onSetMuted={setFeedMuted}
+                onFreeVote={castFreeVote} onOpenCredits={(entry) => setCreditEntry(entry)}
+                onComment={(entry) => setCommentsFor(entry)} onShare={(entry) => setShareForEntry(entry)} onOpenProfile={setProfileFor} />
             ))}
           </div>
         )}
       </div>
-      {viewer && <VideoFeedViewer order={viewer.order} startIndex={viewer.startIndex} entries={entries} contents={contents} voteTotals={voteTotals} comp={comp} user={user}
-        live={comp.status !== 'ended'} freeVoteUsed={freeVoteUsed} credits={credits} statusText={isEnded ? 'Competition ended' : comp.countdownStartedAt ? `⏱ ${countdownText}` : statusText} commentsTick={commentsTick}
-        onFreeVote={castFreeVote} onOpenCredits={(entry) => setCreditEntry(entry)} onComment={(entry) => setCommentsFor(entry)} onShare={(entry) => setShareForEntry(entry)} onClose={() => setViewer(null)} />}
+      {profileFor && <PublicProfileScreen accountId={profileFor} viewerId={user.username} onClose={() => setProfileFor(null)} />}
       {creditEntry && <CreditVoteModal entry={creditEntry} remaining={credits} onConfirm={confirmCreditVote} onClose={() => setCreditEntry(null)} />}
       {commentsFor && <CommentsSheet targetId={commentsFor.id} targetLabel={`@${commentsFor.username}`} user={user} onClose={closeComments} onToast={onToast} />}
       {shareForEntry && <ShareSheet item={{ id: shareForEntry.id, username: shareForEntry.username, caption: contents[shareForEntry.contentId]?.caption || '', compTitle: comp.title }} user={user} onClose={() => setShareForEntry(null)} onToast={onToast} />}
@@ -2273,7 +2608,7 @@ function WinnersScreen({ comps, onOpenComp }) {
   );
 }
 
-function ProfileScreen({ user, myContent, myEntries, comps, wallet, onFeedback, onAdmin, onLogout, onOpenComp, onToast }) {
+function ProfileScreen({ user, myContent, myEntries, comps, wallet, onFeedback, onAdmin, onLogout, onOpenComp, onToast, onEditProfile }) {
   const [tab, setTab] = useState('uploads');
   const [reposts, setReposts] = useState([]);
   const wins = comps.filter(c => c.status === 'ended' && c.winnerEntryId && myEntries.some(e => e.id === c.winnerEntryId));
@@ -2288,9 +2623,14 @@ function ProfileScreen({ user, myContent, myEntries, comps, wallet, onFeedback, 
     <div className="pb-4">
       <TopBar title="Profile" />
       <div className="px-4 pt-4 flex flex-col items-center">
-        <div style={{ background: `linear-gradient(135deg, ${C.blue}, ${C.pink})` }} className="w-20 h-20 rounded-full flex items-center justify-center text-3xl">{user.avatar}</div>
-        <div style={{ color: C.paper }} className="font-black text-lg mt-2">@{user.username}</div>
-        {user.bio && <div style={{ color: C.muted }} className="text-xs mt-1 text-center max-w-xs">{user.bio}</div>}
+        <Avatar profile={user} size={80} gradient />
+        {user.displayName && <div style={{ color: C.paper }} className="font-black text-xl mt-2">{user.displayName}</div>}
+        <div style={{ color: user.displayName ? C.muted : C.paper }} className={user.displayName ? 'text-sm' : 'font-black text-lg mt-2'}>@{handleOf(user)}</div>
+        {user.bio && <div style={{ color: C.paper }} className="text-xs mt-1.5 text-center max-w-xs whitespace-pre-wrap">{user.bio}</div>}
+        {user.showLocation && user.location && <div style={{ color: C.muted }} className="text-xs mt-1.5">📍 {user.location}</div>}
+        <InterestChips interests={user.interests} />
+        <SocialLinks links={user.links} />
+        <button onClick={onEditProfile} style={{ background: C.blue, color: 'white' }} className="font-bold px-8 py-2.5 rounded-xl text-sm mt-4">✏️ Edit Profile</button>
         {wins.length > 0 && <div className="flex gap-1 mt-2">{wins.map(c => <span key={c.id} title={c.title} className="text-xl">🏆</span>)}</div>}
         <div className="flex gap-6 mt-3">
           <Stat label="Wins" value={wins.length} color={C.amber} />
@@ -2331,7 +2671,7 @@ function ProfileScreen({ user, myContent, myEntries, comps, wallet, onFeedback, 
           )) : (reposts.length === 0 ? <EmptyState text="Nothing reposted yet." /> : (
             <div className="flex flex-col gap-2">{reposts.map(r => (
               <div key={r.id} style={{ background: C.surface }} className="rounded-xl p-3">
-                <div style={{ color: C.muted }} className="text-[10px] mb-1.5">@{user.username} reposted</div>
+                <div style={{ color: C.muted }} className="text-[10px] mb-1.5">@{handleOf(user)} reposted</div>
                 <div style={{ background: C.surface2 }} className="rounded-lg p-2.5">
                   <div style={{ color: C.paper }} className="text-xs font-bold">@{r.originalUsername}{r.compTitle ? ` · ${r.compTitle}` : ''}</div>
                   <div style={{ color: C.muted }} className="text-xs truncate">{r.originalCaption}</div>
@@ -2482,6 +2822,7 @@ export default function KrushCompetitionApp() {
   const openCompWithIntent = (c, intent) => { setOpenComp(c); setOpenCompIntent(intent || null); };
   const [inAdmin, setInAdmin] = useState(false); const [adminUnlocked, setAdminUnlocked] = useState(false);
   const [inFeedback, setInFeedback] = useState(false);
+  const [inEditProfile, setInEditProfile] = useState(false);
   const [toast, setToast] = useState(null);
 
   // ---- Home video feed + notifications state ----
@@ -2539,8 +2880,24 @@ export default function KrushCompetitionApp() {
     })();
   }, [reloadComps, reloadMine, loadFeedState]);
 
-  const checkUsername = async (username) => !!(await sGet(`user:${username}`, true));
-  const findUser = async (username) => await sGet(`user:${username}`, true);
+  // A username counts as taken if it matches ANY account's permanent ID or current public username (case-insensitive).
+  const checkUsername = async (username) => {
+    const t = username.trim(); const lower = t.toLowerCase();
+    if (await sGet(`user:${t}`, true)) return true;
+    if (await sGet(`handle:${lower}`, true)) return true;
+    try { const keys = await sList('user:', true); if (keys.some(k => String(k).replace(/^user:/, '').toLowerCase() === lower)) return true; } catch {}
+    return false;
+  };
+  // Log in with either the permanent username or the current public username.
+  const findUser = async (username) => {
+    const t = username.trim(); const lower = t.toLowerCase();
+    const viaHandle = await sGet(`handle:${lower}`, true);
+    if (viaHandle?.accountId) { const u = await sGet(`user:${viaHandle.accountId}`, true); if (u) return u; }
+    const direct = await sGet(`user:${t}`, true);
+    if (direct) return direct;
+    try { const keys = await sList('user:', true); const m = keys.find(k => String(k).replace(/^user:/, '').toLowerCase() === lower); if (m) return await sGet(m, true); } catch {}
+    return null;
+  };
   const finishProfileSetup = ({ username, bio, avatar }) => {
     setProfileDraft({ username, bio, avatar });
     setPhase('interests');
@@ -2549,6 +2906,7 @@ export default function KrushCompetitionApp() {
     const { username, bio, avatar } = profileDraft;
     const u = { username, displayName: signupDraft.displayName, bio, avatar, email: signupDraft.email, interests, createdAt: Date.now() };
     await sSet(`user:${username}`, u, true);
+    await sSet(`handle:${username.toLowerCase()}`, { accountId: username }, true);
     await sSet('session', { username }, false);
     const existingWallet = await sGet(`wallet:${username}`, true);
     if (!existingWallet) await sSet(`wallet:${username}`, { balance: STARTING_WALLET_BALANCE }, true);
@@ -2616,6 +2974,7 @@ export default function KrushCompetitionApp() {
       </Shell>
     );
   }
+  if (inEditProfile) return <Shell><EditProfileScreen user={user} onCancel={() => setInEditProfile(false)} onSaved={(u) => { setUser(u); setInEditProfile(false); }} onToast={showToast} />{toast && <Toast message={toast} onDone={() => setToast(null)} />}</Shell>;
   if (inFeedback) return <Shell><FeedbackScreen user={user} onBack={() => setInFeedback(false)} onDone={() => setInFeedback(false)} onToast={showToast} />{toast && <Toast message={toast} onDone={() => setToast(null)} />}</Shell>;
   if (inAdmin) return (
     <Shell>
@@ -2730,7 +3089,7 @@ export default function KrushCompetitionApp() {
     ),
     create: <CreateScreen user={user} myContent={myContent} comps={comps} onToast={showToast} reloadContent={() => reloadMine(user)} onOpenComp={openCompWithIntent} />,
     winners: <WinnersScreen comps={comps} onOpenComp={setOpenComp} />,
-    profile: <ProfileScreen user={user} myContent={myContent} myEntries={myEntries} comps={comps} wallet={wallet} onFeedback={() => setInFeedback(true)} onAdmin={() => setInAdmin(true)} onLogout={logout} onOpenComp={(c, intent) => openCompWithIntent(c, intent)} onToast={showToast} />,
+    profile: <ProfileScreen user={user} myContent={myContent} myEntries={myEntries} comps={comps} wallet={wallet} onFeedback={() => setInFeedback(true)} onAdmin={() => setInAdmin(true)} onLogout={logout} onOpenComp={(c, intent) => openCompWithIntent(c, intent)} onToast={showToast} onEditProfile={() => setInEditProfile(true)} />,
   };
 
   const navigateTab = (id) => {
