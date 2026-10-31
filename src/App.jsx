@@ -328,7 +328,7 @@ function BottomNav({ screen, setScreen }) {
     <div style={{ background: C.surface, borderTop: `1px solid ${C.surface2}` }} className="fixed bottom-0 left-0 right-0 z-40 flex justify-around py-2 px-1">
       {items.map(({ id, label, icon: Icon }) => {
         const active = screen === id;
-        return <button key={id} onClick={() => setScreen(id)} className="flex flex-col items-center gap-0.5 px-2 py-1 flex-1"><Icon size={22} color={active ? C.blue : C.muted} /><span style={{ color: active ? C.blue : C.muted }} className="text-[10px] font-semibold">{label}</span></button>;
+        return <button key={id} data-tour={`nav-${id}`} onClick={() => setScreen(id)} className="flex flex-col items-center gap-0.5 px-2 py-1 flex-1"><Icon size={22} color={active ? C.blue : C.muted} /><span style={{ color: active ? C.blue : C.muted }} className="text-[10px] font-semibold">{label}</span></button>;
       })}
     </div>
   );
@@ -3194,7 +3194,7 @@ function WinnersScreen({ comps, onOpenComp }) {
   );
 }
 
-function ProfileScreen({ user, myContent, myEntries, comps, wallet, onFeedback, onAdmin, onLogout, onOpenComp, onToast, onEditProfile, onOpenWallet }) {
+function ProfileScreen({ user, myContent, myEntries, comps, wallet, onFeedback, onAdmin, onLogout, onOpenComp, onToast, onEditProfile, onOpenWallet, onHelp }) {
   const data = useProfileData(user.username);
   const wins = data ? data.items.filter(i => i.result === 'win') : [];
   return (
@@ -3212,7 +3212,7 @@ function ProfileScreen({ user, myContent, myEntries, comps, wallet, onFeedback, 
         {wins.length > 0 && <div className="flex gap-1 mt-3">{wins.map(i => <span key={i.entry.id} title={i.comp.title} className="text-xl">🏆</span>)}</div>}
         <ProfileStatsRow data={data} />
 
-        <button onClick={onOpenWallet} style={{ background: C.surface, border: `1px solid ${C.amber}` }} className="w-full rounded-xl p-4 mt-5 flex items-center gap-3 text-left">
+        <button data-tour="tour-wallet" onClick={onOpenWallet} style={{ background: C.surface, border: `1px solid ${C.amber}` }} className="w-full rounded-xl p-4 mt-5 flex items-center gap-3 text-left">
           <Wallet size={22} color={C.amber} />
           <div className="flex-1">
             <div style={{ color: C.paper }} className="text-sm font-bold">Demo KRUSH Wallet</div>
@@ -3222,7 +3222,8 @@ function ProfileScreen({ user, myContent, myEntries, comps, wallet, onFeedback, 
         </button>
 
         <ProfileTabs accountId={user.username} profile={user} data={data} viewer={user} onToast={onToast} onOpenComp={onOpenComp} />
-        <button onClick={onFeedback} style={{ background: C.blue, color: 'white' }} className="w-full font-bold py-3 rounded-xl mt-6">Give Feedback</button>
+        <button onClick={onHelp} style={{ background: C.surface, border: `1px solid ${C.pink}`, color: C.paper }} className="w-full font-bold py-3 rounded-xl mt-6">❓ Help Center</button>
+        <button onClick={onFeedback} style={{ background: C.blue, color: 'white' }} className="w-full font-bold py-3 rounded-xl mt-3">Give Feedback</button>
         <button onClick={onLogout} style={{ color: C.muted, border: `1px solid ${C.surface2}` }} className="w-full font-bold py-3 rounded-xl mt-3 text-sm">Log Out (test session)</button>
         <button onClick={onAdmin} style={{ color: C.muted }} className="text-xs mt-6 flex items-center gap-1"><Shield size={12} /> Facilitator Tools</button>
       </div>
@@ -3318,6 +3319,7 @@ function AdminPanel({ comps, reloadComps, onBack, onToast }) {
       <TopBar title="Facilitator Tools" onBack={onBack} />
       <div className="px-4 pt-4">
         <WalletConfigCard onToast={onToast} />
+        <SupportTicketsCard onToast={onToast} />
         <SectionLabel text={`Competitions (${comps.length})`} />
         <div className="flex flex-col gap-2">
           {comps.map(c => (
@@ -3348,6 +3350,398 @@ function AdminPanel({ comps, reloadComps, onBack, onToast }) {
   );
 }
 
+// ---------- TUTORIAL, HELP CENTER, FAQ & SUPPORT ----------
+// Tutorial state is stored per account as `tutorial:{accountId}` -> { status: 'pending' | 'completed' | 'skipped', at }.
+// Accounts that existed before this update have no record, so they are NOT prompted (they can replay from Help Center).
+const SUPPORT_CATEGORIES = ['Account or Profile', 'Video Upload', 'Competition Entry', 'Voting', 'KRUSH Wallet', 'Comments or Sharing', 'Technical Problem', 'Report a Bug', 'Other'];
+const SUPPORT_SCREENSHOT_MAX_BYTES = 5 * 1024 * 1024;
+const SUPPORT_SCREENSHOT_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+
+// To change FAQ wording: edit this list (or save a JSON list of the same shape under the shared key `config:faq`, which overrides it).
+const FAQ_DEFAULT = [
+  { category: 'Getting Started', items: [
+    { q: 'What is KRUSH?', a: 'KRUSH is a social competition platform where creators share their talents, enter competitions, and connect with fans who watch and vote.' },
+    { q: 'How old do I have to be to use KRUSH?', a: 'KRUSH is intended for users who are at least 18 years old.' },
+    { q: 'How do I create a profile?', a: 'Sign up, complete your profile information, choose your interests, and start exploring KRUSH.' },
+    { q: 'Can I change my profile information?', a: 'Yes! Visit Profile and select Edit Profile to update your picture, display name, username, bio, and other available information.' },
+  ] },
+  { category: 'Competitions', items: [
+    { q: 'How do I enter a competition?', a: 'Tap Compete, select an available competition, review its rules, and follow the instructions to upload your entry.' },
+    { q: 'How many people can enter a competition?', a: `Standard KRUSH competitions currently allow up to ${MAX_SPOTS} entrants.` },
+    { q: 'How long do competitions last?', a: `Standard competitions are designed to run for ${Math.round(COMPETITION_DURATION_MS / 3600000)} hours, counting down once the second contestant enters. Special testing competitions may have different durations.` },
+    { q: 'How do I know if I won?', a: 'Visit Winners or check your competition history on your Profile after the competition has officially ended and results are available.' },
+    { q: 'Can I enter more than one competition?', a: 'Entry eligibility depends on the rules of each competition. You can enter a competition once, and you can only choose to compete or to watch before you submit your entry. Review the competition details before entering.' },
+  ] },
+  { category: 'Voting', items: [
+    { q: 'How do I vote?', a: 'Open a competition, select Watch & Vote, watch the entries, and tap Vote on an eligible competitor.' },
+    { q: 'Are votes free?', a: 'KRUSH includes a free vote in each competition. Additional votes use demo credits according to the current competition rules.' },
+    { q: 'Can I vote for myself?', a: 'No. If you are competing, you can still watch, vote for other competitors, and comment, but you cannot vote for your own entry.' },
+    { q: 'Can I change my vote?', a: 'Votes are counted right away and the app does not currently offer a way to undo or move a vote. Follow the rules shown on the specific competition.' },
+  ] },
+  { category: 'KRUSH Wallet', items: [
+    { q: 'What is the KRUSH Wallet?', a: 'Your KRUSH Wallet displays your available tokens, transaction history, and supported wallet activities. You can open it from your Profile.' },
+    { q: 'Are we using real money during testing?', a: 'No. All wallet balances, deposits, withdrawals, and rewards are simulated during prototype testing.' },
+    { q: 'How do I add demo tokens?', a: 'Open your KRUSH Wallet from your Profile and select Add Tokens (when it is turned on).' },
+    { q: 'Can I withdraw real money?', a: 'Not during prototype testing. Demo withdrawals are simulations and do not transfer real money.' },
+    { q: 'What payment methods will KRUSH accept?', a: 'KRUSH is evaluating future support for eligible Visa, Mastercard, Cash App, PayPal, and Venmo payment methods. Availability is not guaranteed and will depend on approved integrations and provider requirements.' },
+  ] },
+  { category: 'Profile & Account', items: [
+    { q: 'How do I upload a profile picture?', a: 'Open Profile, select Edit Profile, and choose the option to update your picture.' },
+    { q: 'How do I change my username?', a: 'Visit Edit Profile and update your username, subject to availability.' },
+    { q: 'Where can I see my competition history?', a: 'Visit your Profile and open the History tab.' },
+    { q: 'How do I see my wins and losses?', a: 'Your profile displays your competition statistics and completed competition results.' },
+  ] },
+  { category: 'Technical Support', items: [
+    { q: 'My video will not upload. What should I do?', a: 'Check your connection, confirm that your video meets the competition requirements (under 60 seconds), and try again. If the problem continues, contact KRUSH Support.' },
+    { q: 'My video is not playing. What should I do?', a: 'Refresh the page, check your connection, and try again. If the issue continues, contact support.' },
+    { q: 'My wallet balance looks incorrect. What should I do?', a: 'Review your transaction history in the Wallet. If the balance still appears incorrect, submit a support request.' },
+    { q: 'How do I report a problem?', a: 'Open the Help Center and select Contact Support.' },
+  ] },
+];
+function validFaq(v) { return Array.isArray(v) && v.length > 0 && v.every(g => g && typeof g.category === 'string' && Array.isArray(g.items) && g.items.every(i => i && typeof i.q === 'string' && typeof i.a === 'string')); }
+function filterFaq(groups, query) {
+  const q = String(query || '').trim().toLowerCase();
+  if (!q) return groups;
+  return groups.map(g => ({ ...g, items: g.items.filter(i => i.q.toLowerCase().includes(q) || i.a.toLowerCase().includes(q) || g.category.toLowerCase().includes(q)) })).filter(g => g.items.length > 0);
+}
+
+function validateSupportForm({ subject, category, description }) {
+  if (!String(subject || '').trim()) return 'Please add a subject.';
+  if (!SUPPORT_CATEGORIES.includes(category)) return 'Please choose an issue category.';
+  if (String(description || '').trim().length < 10) return 'Please describe the problem in at least a few words (10+ characters).';
+  return '';
+}
+function validateScreenshot(file) {
+  if (!file) return '';
+  if (!SUPPORT_SCREENSHOT_TYPES.includes(file.type)) return 'Screenshots must be a JPG, PNG or WebP image.';
+  if (file.size > SUPPORT_SCREENSHOT_MAX_BYTES) return 'That screenshot is too large. Please use one under 5 MB.';
+  return '';
+}
+// Writes straight to the shared database and then READS IT BACK. Throws unless the record is really there,
+// so a success message is only ever shown for a ticket that was actually saved.
+async function saveVerified(key, value) {
+  if (!window.storage) throw new Error('Storage is not available.');
+  const ok = await window.storage.set(key, JSON.stringify(value), true);
+  if (ok !== true) throw new Error('The database did not confirm the save.');
+  const back = await window.storage.get(key, true);
+  if (!back || !back.value) throw new Error('The saved request could not be read back.');
+  return true;
+}
+async function nextTicketRef() {
+  let keys = [];
+  try { const r = await window.storage.list('ticket:', true); keys = r?.keys || []; } catch { keys = []; }
+  let n = keys.length + 1;
+  for (let tries = 0; tries < 25; tries++, n++) {
+    const ref = `KRUSH-${String(n).padStart(6, '0')}`;
+    if (!keys.includes(`ticket:${ref}`)) {
+      const exists = await window.storage.get(`ticket:${ref}`, true).catch(() => null);
+      if (!exists) return ref;
+    }
+  }
+  return `KRUSH-${String(Date.now()).slice(-6)}`;
+}
+async function uploadSupportScreenshot(file) {
+  const fd = new FormData();
+  fd.append('file', file);
+  fd.append('upload_preset', CLOUDINARY_UPLOAD_PRESET);
+  const res = await fetch(`https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/image/upload`, { method: 'POST', body: fd });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.secure_url) throw new Error(data?.error?.message || 'Screenshot upload failed');
+  return data.secure_url;
+}
+
+async function getTutorialStatus(accountId) { const r = await sGet(`tutorial:${accountId}`, true); return r?.status || null; }
+async function setTutorialStatus(accountId, status) { await sSet(`tutorial:${accountId}`, { status, at: Date.now() }, true); }
+
+function TutorialWelcome({ onStart, onSkip }) {
+  return (
+    <div className="min-h-full flex flex-col items-center justify-center px-6 py-10 text-center">
+      <LogoMark size="lg" />
+      <h1 style={{ color: C.paper }} className="text-3xl font-black mt-8">WELCOME TO KRUSH!</h1>
+      <div style={{ color: C.paper }} className="text-lg font-bold mt-4 leading-snug">Creators compete.<br />Fans vote.<br /><span style={{ color: C.amber }}>Winners get paid.</span></div>
+      <div style={{ color: C.muted }} className="text-sm mt-5">Ready to see how KRUSH works?</div>
+      <button onClick={onStart} style={{ background: C.pink, color: 'white' }} className="w-full max-w-xs font-black py-3.5 rounded-xl mt-8">SHOW ME AROUND</button>
+      <button onClick={onSkip} style={{ color: C.paper, border: `1px solid ${C.surface2}` }} className="w-full max-w-xs font-bold py-3.5 rounded-xl mt-3">I'LL EXPLORE MYSELF</button>
+      <div style={{ color: C.muted }} className="text-[11px] mt-5">The tour takes about a minute. You can replay it any time from Profile → Help Center.</div>
+    </div>
+  );
+}
+
+const TOUR_STEPS = [
+  { key: 'home', screen: 'home', target: 'nav-home', title: 'WELCOME TO YOUR KRUSH FEED!', body: 'Scroll through videos, discover creators, like, comment, and share.' },
+  { key: 'compete', screen: 'competitions', target: 'nav-competitions', title: 'READY TO ENTER THE ARENA?', body: 'Tap COMPETE to explore active competitions. Choose a competition, upload your video, and enter for a chance to win. You can also select WATCH & VOTE to support your favorite competitors.' },
+  { key: 'vote', screen: 'competitions', target: 'tour-sample-vote', title: 'YOUR VOTE MATTERS!', body: 'Watch competing videos and vote for your favorites. KRUSH offers free voting opportunities and additional voting options using credits. Voting rules and eligibility depend on the competition.', sample: true },
+  { key: 'create', screen: 'create', target: 'nav-create', title: 'GOT AN IDEA FOR A COMPETITION?', body: `CREATE is where you post to your profile for free and enter competitions (a standard entry costs ${ENTRY_FEE_STANDARD} demo tokens in this test). Hosting your own competitions or categories is`, comingSoon: 'COMING SOON — no hosting fee or requirements have been set yet.' },
+  { key: 'wallet', screen: 'profile', target: 'tour-wallet', title: 'MEET YOUR KRUSH WALLET!', body: 'Your wallet keeps track of your available credits, transactions, and competition activity. It lives on your Profile screen.', note: 'During testing, all balances and transactions are simulated. NO REAL MONEY IS USED.' },
+  { key: 'profile', screen: 'profile', target: 'nav-winners,nav-profile', title: 'YOUR KRUSH JOURNEY STARTS HERE!', body: 'Visit PROFILE to customize your account, view uploads, track competition wins and losses, and review your activity. Visit WINNERS to see competition results and winning creators.' },
+];
+
+function TourOverlay({ step, onStep, onFinish, onSkip }) {
+  const s = TOUR_STEPS[step];
+  const [rect, setRect] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    const measure = () => {
+      const els = s.target.split(',').map(t => document.querySelector(`[data-tour="${t}"]`)).filter(Boolean);
+      if (s.sample || els.length === 0) { if (!cancelled) setRect(null); return; }
+      const rs = els.map(e => e.getBoundingClientRect());
+      const l = Math.min(...rs.map(r => r.left)), t = Math.min(...rs.map(r => r.top)), r2 = Math.max(...rs.map(r => r.right)), b = Math.max(...rs.map(r => r.bottom));
+      if (!cancelled) setRect({ left: l - 6, top: t - 6, width: r2 - l + 12, height: b - t + 12 });
+    };
+    setRect(null);
+    const first = document.querySelector(`[data-tour="${s.target.split(',')[0]}"]`);
+    if (first && !s.target.startsWith('nav-')) { try { first.scrollIntoView({ block: 'center' }); } catch {} }
+    const t1 = setTimeout(measure, 80); const t2 = setTimeout(measure, 400); const t3 = setTimeout(measure, 900);
+    window.addEventListener('resize', measure);
+    return () => { cancelled = true; clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); window.removeEventListener('resize', measure); };
+  }, [step]);
+  const last = step === TOUR_STEPS.length - 1;
+  const cardAtTop = rect ? (rect.top + rect.height / 2) > (window.innerHeight * 0.5) : false;
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 100 }} onClick={e => e.stopPropagation()}>
+      {rect ? <div style={{ position: 'fixed', left: rect.left, top: rect.top, width: rect.width, height: rect.height, borderRadius: 14, border: `2px solid ${C.pink}`, boxShadow: '0 0 0 9999px rgba(5,6,12,0.82)', pointerEvents: 'none', transition: 'all .25s' }} /> : <div style={{ position: 'fixed', inset: 0, background: 'rgba(5,6,12,0.82)' }} />}
+      <div style={{ position: 'fixed', left: 0, right: 0, ...(cardAtTop ? { top: 12 } : { bottom: 84 }), display: 'flex', justifyContent: 'center', padding: '0 12px', maxHeight: '75vh', overflowY: 'auto' }}>
+        <div style={{ background: C.surface, border: `1px solid ${C.surface2}` }} className="w-full max-w-md rounded-2xl p-4">
+          <div className="flex items-center justify-between mb-1">
+            <div style={{ color: C.muted }} className="text-[10px] font-bold">STEP {step + 1} OF {TOUR_STEPS.length}</div>
+            {!last && <button onClick={onSkip} style={{ color: C.muted }} className="text-xs font-bold px-2 py-1">SKIP</button>}
+          </div>
+          <div style={{ color: C.paper }} className="text-base font-black">{s.title}</div>
+          <div style={{ color: C.muted }} className="text-sm mt-1.5 leading-snug">{s.body}{s.comingSoon && <> <span style={{ color: C.amber }} className="font-bold">{s.comingSoon}</span></>}</div>
+          {s.note && <div style={{ background: 'rgba(255,176,32,0.12)', color: C.amber }} className="text-xs font-bold rounded-lg px-3 py-2 mt-2">{s.note}</div>}
+          {s.sample && (
+            <div data-tour="tour-sample-vote" style={{ background: C.surface2 }} className="rounded-xl p-3 mt-3 pointer-events-none">
+              <div style={{ color: C.muted }} className="text-[10px] font-bold mb-1.5">SAMPLE POST — NOTHING HERE IS REAL</div>
+              <div className="flex items-center gap-2 mb-2"><div style={{ background: C.blue }} className="w-7 h-7 rounded-full" /><div style={{ color: C.paper }} className="text-xs font-bold">@sample_creator</div><div style={{ color: C.amber }} className="text-[10px] font-bold ml-auto">🏆 RANK #1</div></div>
+              <div className="flex gap-2"><div style={{ background: C.pink, color: 'white', border: `2px solid ${C.amber}` }} className="flex-1 text-center py-2 rounded-lg text-xs font-black">❤️ VOTE</div><div style={{ background: C.surface, color: C.paper }} className="flex-1 text-center py-2 rounded-lg text-xs font-bold">Comment</div><div style={{ background: C.surface, color: C.paper }} className="flex-1 text-center py-2 rounded-lg text-xs font-bold">Share</div></div>
+            </div>
+          )}
+          <div className="flex gap-2 mt-4">
+            {step > 0 && <button onClick={() => onStep(step - 1)} style={{ color: C.paper, border: `1px solid ${C.surface2}` }} className="px-4 py-2.5 rounded-xl text-sm font-bold">BACK</button>}
+            {last
+              ? <button onClick={onFinish} style={{ background: C.pink, color: 'white' }} className="flex-1 py-2.5 rounded-xl text-sm font-black">GOT IT! LET'S KRUSH!</button>
+              : <button onClick={() => onStep(step + 1)} style={{ background: C.blue, color: 'white' }} className="flex-1 py-2.5 rounded-xl text-sm font-black">NEXT</button>}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function HelpCenterScreen({ onBack, onTour, onFaq, onSupport }) {
+  const Btn = ({ onClick, emoji, title, sub, color }) => (
+    <button onClick={onClick} style={{ background: C.surface, border: `1px solid ${color}` }} className="w-full rounded-2xl p-4 flex items-center gap-3 text-left mb-3">
+      <span className="text-2xl">{emoji}</span>
+      <span className="flex-1"><span style={{ color: C.paper }} className="block text-sm font-black">{title}</span><span style={{ color: C.muted }} className="block text-xs mt-0.5">{sub}</span></span>
+    </button>
+  );
+  return (
+    <div className="pb-8">
+      <TopBar title="KRUSH HELP CENTER" onBack={onBack} />
+      <div className="px-4 pt-6">
+        <div style={{ color: C.paper }} className="text-2xl font-black">NEED A LITTLE HELP?</div>
+        <div style={{ color: C.muted }} className="text-sm mt-1 mb-6">We've got you! Choose an option below.</div>
+        <Btn onClick={onTour} emoji="🎬" title="TAKE THE KRUSH TOUR" sub="A quick 1-minute walkthrough. Your profile isn't changed." color={C.pink} />
+        <Btn onClick={onFaq} emoji="❓" title="FREQUENTLY ASKED QUESTIONS" sub="Search answers about competitions, voting and the wallet." color={C.blue} />
+        <Btn onClick={onSupport} emoji="💬" title="CONTACT SUPPORT" sub="Tell us what's going on and we'll look into it." color={C.amber} />
+      </div>
+    </div>
+  );
+}
+
+function FaqScreen({ onBack, onSupport }) {
+  const [groups, setGroups] = useState(FAQ_DEFAULT);
+  const [query, setQuery] = useState('');
+  const [open, setOpen] = useState({});
+  useEffect(() => { (async () => { const o = await sGet('config:faq', true); if (validFaq(o)) setGroups(o); })(); }, []);
+  const shown = filterFaq(groups, query);
+  const searching = query.trim().length > 0;
+  return (
+    <div className="pb-8">
+      <TopBar title="FAQ" onBack={onBack} />
+      <div className="px-4 pt-4">
+        <div style={{ color: C.paper }} className="text-lg font-black mb-3">KRUSH FREQUENTLY ASKED QUESTIONS</div>
+        <input value={query} onChange={e => setQuery(e.target.value)} placeholder="🔍 Search questions" style={{ background: C.surface, color: C.paper, border: `1px solid ${C.surface2}`, fontSize: 16 }} className="w-full rounded-xl px-4 py-3 outline-none" />
+        {shown.length === 0 && <div className="py-6"><EmptyState text="No questions match your search. Try different words, or contact support." /></div>}
+        {shown.map(g => (
+          <div key={g.category}>
+            <SectionLabel text={g.category} color={C.pink} />
+            <div className="flex flex-col gap-2">
+              {g.items.map(i => {
+                const k = `${g.category}|${i.q}`; const isOpen = searching || !!open[k];
+                return (
+                  <div key={k} style={{ background: C.surface }} className="rounded-xl overflow-hidden">
+                    <button onClick={() => setOpen(o => ({ ...o, [k]: !o[k] }))} className="w-full flex items-center gap-2 text-left px-4 py-3">
+                      <span style={{ color: C.paper }} className="flex-1 text-sm font-semibold">{i.q}</span>
+                      <span style={{ color: C.muted }} className="text-lg leading-none">{isOpen ? '−' : '+'}</span>
+                    </button>
+                    {isOpen && <div style={{ color: C.muted }} className="px-4 pb-4 text-sm leading-relaxed">{i.a}</div>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+        <div style={{ color: C.muted }} className="text-xs text-center mt-8 mb-2">Didn't find what you need?</div>
+        <button onClick={onSupport} style={{ background: C.amber, color: '#1a1200' }} className="w-full font-black py-3.5 rounded-xl">CONTACT SUPPORT</button>
+      </div>
+    </div>
+  );
+}
+
+function ContactSupportScreen({ user, onBack, onToast }) {
+  const [subject, setSubject] = useState(''); const [category, setCategory] = useState('');
+  const [description, setDescription] = useState('');
+  const [file, setFile] = useState(null); const [fileErr, setFileErr] = useState('');
+  const [busy, setBusy] = useState(false); const [error, setError] = useState('');
+  const [done, setDone] = useState(null);
+  const [mine, setMine] = useState([]);
+  const fileRef = useRef(null);
+  const loadMine = useCallback(async () => {
+    try {
+      const prefix = `ticketref:${user.username}:`;
+      const keys = (await sList(prefix, true)).filter(k => String(k).startsWith(prefix)); // exact-prefix guard: database LIKE treats _ as a wildcard
+      const recs = await sGetMany(keys, true);
+      setMine(recs.sort((a, b) => b.createdAt - a.createdAt).slice(0, 5));
+    } catch { setMine([]); }
+  }, [user.username]);
+  useEffect(() => { loadMine(); }, [loadMine]);
+
+  const pickFile = (e) => {
+    const f = e.target.files?.[0] || null;
+    const err = validateScreenshot(f);
+    setFileErr(err); setFile(err ? null : f);
+    if (err && fileRef.current) fileRef.current.value = '';
+  };
+  const submit = async () => {
+    setError('');
+    const v = validateSupportForm({ subject, category, description });
+    if (v) { setError(v); return; }
+    setBusy(true);
+    try {
+      let screenshotUrl = null;
+      if (file) {
+        try { screenshotUrl = await uploadSupportScreenshot(file); }
+        catch (e) { setError(`Your screenshot couldn't be uploaded (${e.message}). Remove it and submit without it, or try again.`); setBusy(false); return; }
+      }
+      const ref = await nextTicketRef();
+      const createdAt = Date.now();
+      const ticket = { ref, username: user.username, handle: handleOf(user), subject: subject.trim().slice(0, 120), category, description: description.trim().slice(0, 2000), screenshotUrl, status: 'open', createdAt };
+      await saveVerified(`ticket:${ref}`, ticket);
+      try { await saveVerified(`ticketref:${user.username}:${ref}`, { ref, subject: ticket.subject, category, createdAt }); } catch { /* the ticket itself is saved; only the "my requests" list entry failed */ }
+      setDone({ ref, createdAt });
+      loadMine();
+    } catch (e) {
+      setError(`We couldn't save your request, so it was NOT submitted (${e.message}). Please check your connection and try again.`);
+    }
+    setBusy(false);
+  };
+
+  if (done) {
+    return (
+      <div className="pb-8">
+        <TopBar title="Contact Support" onBack={onBack} />
+        <div className="px-4 pt-10 text-center">
+          <div className="text-5xl mb-3">✅</div>
+          <div style={{ color: C.green }} className="text-2xl font-black">REQUEST RECEIVED!</div>
+          <div style={{ color: C.paper }} className="text-sm mt-3">Your support request has been submitted.</div>
+          <div style={{ background: C.surface }} className="rounded-xl p-4 mt-5 inline-block"><div style={{ color: C.muted }} className="text-[10px] font-bold">TICKET NUMBER</div><div style={{ color: C.amber }} className="text-xl font-black">{done.ref}</div></div>
+          <div style={{ color: C.muted }} className="text-xs mt-2">{new Date(done.createdAt).toLocaleString()}</div>
+          <div style={{ color: C.paper }} className="text-sm mt-5">Thank you for helping us improve KRUSH!</div>
+          <button onClick={onBack} style={{ background: C.blue, color: 'white' }} className="w-full max-w-xs font-bold py-3.5 rounded-xl mt-8">DONE</button>
+        </div>
+      </div>
+    );
+  }
+  const inputStyle = { background: C.surface, color: C.paper, border: `1px solid ${C.surface2}`, fontSize: 16 };
+  return (
+    <div className="pb-8">
+      <TopBar title="Contact Support" onBack={onBack} />
+      <div className="px-4 pt-4">
+        <div style={{ color: C.paper }} className="text-xl font-black">CONTACT KRUSH SUPPORT</div>
+        <div style={{ color: C.paper }} className="text-sm font-bold mt-3">NEED HELP?</div>
+        <div style={{ color: C.muted }} className="text-sm mb-4">Tell us what's going on, and we'll help you find a solution.</div>
+
+        <label style={{ color: C.paper }} className="text-xs font-bold">Subject *</label>
+        <input value={subject} maxLength={120} onChange={e => setSubject(e.target.value)} style={inputStyle} className="w-full rounded-xl px-4 py-3 outline-none mt-1 mb-3" />
+        <label style={{ color: C.paper }} className="text-xs font-bold">Issue category *</label>
+        <select value={category} onChange={e => setCategory(e.target.value)} style={inputStyle} className="w-full rounded-xl px-4 py-3 outline-none mt-1 mb-3">
+          <option value="">Choose a category…</option>
+          {SUPPORT_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
+        <label style={{ color: C.paper }} className="text-xs font-bold">Description *</label>
+        <textarea value={description} maxLength={2000} rows={5} onChange={e => setDescription(e.target.value)} placeholder="Tell us in your own words what happened." style={inputStyle} className="w-full rounded-xl px-4 py-3 outline-none mt-1 mb-1 resize-none" />
+        <div style={{ color: C.muted }} className="text-[10px] text-right mb-3">{description.length}/2000</div>
+        <label style={{ color: C.paper }} className="text-xs font-bold">Screenshot <span style={{ color: C.muted }} className="font-normal">(optional · JPG, PNG or WebP · under 5 MB)</span></label>
+        <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp" onChange={pickFile} style={{ color: C.muted }} className="w-full text-xs mt-1 mb-1" />
+        {file && <div style={{ color: C.green }} className="text-xs">✓ {file.name} attached</div>}
+        {fileErr && <div style={{ color: C.red }} className="text-xs">{fileErr}</div>}
+        <div style={{ background: 'rgba(255,176,32,0.1)', color: C.amber }} className="text-[11px] rounded-lg px-3 py-2 mt-3">Please never include passwords, card numbers or other payment details. KRUSH will never ask for them here.</div>
+        {error && <div style={{ background: 'rgba(255,77,77,0.12)', color: C.red }} className="text-xs font-semibold rounded-lg px-3 py-2 mt-3">{error}</div>}
+        <button onClick={submit} disabled={busy} style={{ background: C.pink, color: 'white', opacity: busy ? 0.6 : 1 }} className="w-full font-black py-3.5 rounded-xl mt-4">{busy ? 'SENDING…' : 'SUBMIT SUPPORT REQUEST'}</button>
+
+        {mine.length > 0 && (
+          <div className="mt-8">
+            <SectionLabel text="Your recent requests" />
+            <div className="flex flex-col gap-2">{mine.map(t => (
+              <div key={t.ref} style={{ background: C.surface }} className="rounded-xl px-4 py-3">
+                <div className="flex justify-between"><span style={{ color: C.amber }} className="text-xs font-black">{t.ref}</span><span style={{ color: C.muted }} className="text-[10px]">{new Date(t.createdAt).toLocaleDateString()}</span></div>
+                <div style={{ color: C.paper }} className="text-sm mt-0.5">{t.subject}</div>
+              </div>
+            ))}</div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Facilitator-only (behind the existing Facilitator PIN). Lists every saved support request, newest first.
+function SupportTicketsCard({ onToast }) {
+  const [tickets, setTickets] = useState(null);
+  const [open, setOpen] = useState(null);
+  const load = useCallback(async () => {
+    try { const keys = await sList('ticket:', true); const recs = await sGetMany(keys, true); setTickets(recs.sort((a, b) => b.createdAt - a.createdAt)); }
+    catch { setTickets([]); }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  const toggleStatus = async (t) => {
+    const next = { ...t, status: t.status === 'resolved' ? 'open' : 'resolved', updatedAt: Date.now() };
+    try { await saveVerified(`ticket:${t.ref}`, next); onToast(`${t.ref} marked ${next.status}.`); load(); }
+    catch (e) { onToast(`Couldn't update ${t.ref}: ${e.message}`); }
+  };
+  const openCount = (tickets || []).filter(t => t.status !== 'resolved').length;
+  return (
+    <div style={{ background: C.surface }} className="rounded-xl p-3 mt-2">
+      <div className="flex items-center justify-between mb-2">
+        <div style={{ color: C.paper }} className="text-sm font-bold">Support tickets {tickets ? `(${openCount} open / ${tickets.length} total)` : ''}</div>
+        <button onClick={load} style={{ color: C.blue }} className="text-xs font-bold">Refresh</button>
+      </div>
+      {tickets === null ? <div style={{ color: C.muted }} className="text-xs">Loading…</div> : tickets.length === 0 ? <div style={{ color: C.muted }} className="text-xs">No support requests yet.</div> : (
+        <div className="flex flex-col gap-2">
+          {tickets.map(t => (
+            <div key={t.ref} style={{ background: C.surface2 }} className="rounded-lg p-2.5">
+              <button onClick={() => setOpen(open === t.ref ? null : t.ref)} className="w-full text-left">
+                <div className="flex justify-between items-center"><span style={{ color: C.amber }} className="text-xs font-black">{t.ref}</span><span style={{ color: t.status === 'resolved' ? C.green : C.pink }} className="text-[10px] font-bold uppercase">{t.status || 'open'}</span></div>
+                <div style={{ color: C.paper }} className="text-xs font-semibold mt-0.5">{t.subject}</div>
+                <div style={{ color: C.muted }} className="text-[10px]">@{t.handle || t.username} · {t.category} · {new Date(t.createdAt).toLocaleString()}</div>
+              </button>
+              {open === t.ref && (
+                <div className="mt-2">
+                  <div style={{ color: C.paper }} className="text-xs whitespace-pre-wrap">{t.description}</div>
+                  <div style={{ color: C.muted }} className="text-[10px] mt-1">Account ID: {t.username}</div>
+                  {t.screenshotUrl && <a href={t.screenshotUrl} target="_blank" rel="noreferrer" style={{ color: C.blue }} className="text-xs font-bold block mt-1">View screenshot ↗</a>}
+                  <button onClick={() => toggleStatus(t)} style={{ background: t.status === 'resolved' ? C.surface : C.green, color: t.status === 'resolved' ? C.paper : '#04210f' }} className="text-xs font-bold px-3 py-1.5 rounded-lg mt-2">{t.status === 'resolved' ? 'Reopen' : 'Mark resolved'}</button>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ---------- ROOT ----------
 export default function KrushCompetitionApp() {
   const [phase, setPhase] = useState('loading');
@@ -3366,6 +3760,12 @@ export default function KrushCompetitionApp() {
   const [inFeedback, setInFeedback] = useState(false);
   const [inEditProfile, setInEditProfile] = useState(false);
   const [inWallet, setInWallet] = useState(false);
+  const [helpView, setHelpView] = useState(null); // null | 'hub' | 'faq' | 'support'
+  const [welcomeFor, setWelcomeFor] = useState(null); // account id while the optional-tour invitation is showing
+  const [tour, setTour] = useState(null); // { step, replay }
+  const shellScroll = useRef(0);
+  const openHelp = (view) => { if (!helpView) { const el = document.querySelector('[data-krush-shell]'); shellScroll.current = el ? el.scrollTop : 0; } setHelpView(view); };
+  const closeHelp = () => { setHelpView(null); setTimeout(() => { const el = document.querySelector('[data-krush-shell]'); if (el) el.scrollTop = shellScroll.current; }, 60); };
   const [toast, setToast] = useState(null);
 
   // ---- Home video feed + notifications state ----
@@ -3417,7 +3817,7 @@ export default function KrushCompetitionApp() {
       const session = await sGet('session', false);
       if (session?.username) {
         const u = await sGet(`user:${session.username}`, true);
-        if (u) { setUser(u); await reloadMine(u); await loadFeedState(u); setPhase('app'); return; }
+        if (u) { setUser(u); await reloadMine(u); await loadFeedState(u); if ((await getTutorialStatus(u.username)) === 'pending') setWelcomeFor(u.username); setPhase('app'); return; }
       }
       setPhase('welcome');
     })();
@@ -3453,10 +3853,11 @@ export default function KrushCompetitionApp() {
     await sSet('session', { username }, false);
     const existingWallet = await sGet(`wallet:${username}`, true);
     if (!existingWallet) await sSet(`wallet:${username}`, { balance: STARTING_WALLET_BALANCE }, true);
-    setUser(u); await reloadMine(u); await loadFeedState(u); setPhase('app'); setToast('Account created for this test session.');
+    await setTutorialStatus(username, 'pending');
+    setUser(u); await reloadMine(u); await loadFeedState(u); setWelcomeFor(username); setPhase('app'); setToast('Account created for this test session.');
   };
-  const login = async (u) => { await sSet('session', { username: u.username }, false); setUser(u); await reloadMine(u); await loadFeedState(u); setPhase('app'); };
-  const logout = async () => { await sDelete('session', false); setUser(null); setPhase('welcome'); setScreen('home'); };
+  const login = async (u) => { await sSet('session', { username: u.username }, false); setUser(u); await reloadMine(u); await loadFeedState(u); if ((await getTutorialStatus(u.username)) === 'pending') setWelcomeFor(u.username); setPhase('app'); };
+  const logout = async () => { await sDelete('session', false); setUser(null); setWelcomeFor(null); setTour(null); setHelpView(null); setPhase('welcome'); setScreen('home'); };
 
   const showToast = (m) => setToast(m);
 
@@ -3506,6 +3907,20 @@ export default function KrushCompetitionApp() {
   if (phase === 'profilesetup') return <Shell><ProfileSetupScreen draft={signupDraft} initial={profileDraft} onBack={() => setPhase('signup')} onDone={finishProfileSetup} checkUsername={checkUsername} /></Shell>;
   if (phase === 'interests') return <Shell><InterestsScreen initialSelected={profileDraft?.interests} onBack={() => setPhase('profilesetup')} onContinue={completeOnboarding} /></Shell>;
   if (phase === 'login') return <Shell><LogInScreen onBack={() => setPhase('welcome')} onLogin={login} findUser={findUser} /></Shell>;
+
+  const startTour = (replay) => { setHelpView(null); setInWallet(false); setInEditProfile(false); setInFeedback(false); setInAdmin(false); setOpenComp(null); setScreen(TOUR_STEPS[0].screen); setTour({ step: 0, replay: !!replay }); };
+  const goTourStep = (n) => { setScreen(TOUR_STEPS[n].screen); setTour(t => ({ ...t, step: n })); };
+  const endTour = async (how) => {
+    const wasReplay = tour?.replay;
+    setTour(null); setScreen('home');
+    if (!wasReplay) await setTutorialStatus(user.username, how);
+  };
+  const chooseTour = async () => { setWelcomeFor(null); startTour(false); };
+  const chooseSkipTour = async () => { const id = welcomeFor; setWelcomeFor(null); setScreen('home'); await setTutorialStatus(id, 'skipped'); };
+  if (welcomeFor) return <Shell><TutorialWelcome onStart={chooseTour} onSkip={chooseSkipTour} />{toast && <Toast message={toast} onDone={() => setToast(null)} />}</Shell>;
+  if (helpView === 'hub') return <Shell><HelpCenterScreen onBack={closeHelp} onTour={() => startTour(true)} onFaq={() => setHelpView('faq')} onSupport={() => setHelpView('support')} />{toast && <Toast message={toast} onDone={() => setToast(null)} />}</Shell>;
+  if (helpView === 'faq') return <Shell><FaqScreen onBack={() => setHelpView('hub')} onSupport={() => setHelpView('support')} />{toast && <Toast message={toast} onDone={() => setToast(null)} />}</Shell>;
+  if (helpView === 'support') return <Shell><ContactSupportScreen user={user} onBack={() => setHelpView('hub')} onToast={showToast} />{toast && <Toast message={toast} onDone={() => setToast(null)} />}</Shell>;
 
   if (openComp) {
     return (
@@ -3633,7 +4048,7 @@ export default function KrushCompetitionApp() {
     ),
     create: <CreateScreen user={user} myContent={myContent} comps={comps} onToast={showToast} reloadContent={() => reloadMine(user)} onOpenComp={openCompWithIntent} />,
     winners: <WinnersScreen comps={comps} onOpenComp={setOpenComp} />,
-    profile: <ProfileScreen user={user} myContent={myContent} myEntries={myEntries} comps={comps} wallet={wallet} onFeedback={() => setInFeedback(true)} onAdmin={() => setInAdmin(true)} onLogout={logout} onOpenComp={(c, intent) => openCompWithIntent(c, intent)} onToast={showToast} onEditProfile={() => setInEditProfile(true)} onOpenWallet={() => setInWallet(true)} />,
+    profile: <ProfileScreen user={user} myContent={myContent} myEntries={myEntries} comps={comps} wallet={wallet} onFeedback={() => setInFeedback(true)} onAdmin={() => setInAdmin(true)} onLogout={logout} onOpenComp={(c, intent) => openCompWithIntent(c, intent)} onToast={showToast} onEditProfile={() => setInEditProfile(true)} onOpenWallet={() => setInWallet(true)} onHelp={() => openHelp('hub')} />,
   };
 
   const navigateTab = (id) => {
@@ -3647,6 +4062,7 @@ export default function KrushCompetitionApp() {
     <Shell>
       <div className="pb-20">{screens[screen]}</div>
       <BottomNav screen={screen} setScreen={navigateTab} />
+      {tour && <TourOverlay step={tour.step} onStep={goTourStep} onFinish={() => endTour('completed')} onSkip={() => endTour('skipped')} />}
       {creatorPost && <CreatorProfileModal post={creatorPost} following={!!feedState.following[creatorPost.creator]} onFollow={toggleFollow} onClose={() => setCreatorPost(null)} />}
       {commentsFor && <CommentsSheet targetId={commentsFor.id} targetLabel={`@${commentsFor.username}`} user={user} onClose={closeFeedComments} onToast={showToast} />}
       {shareForPost && <ShareSheet item={shareForPost} user={user} onClose={() => setShareForPost(null)} onToast={showToast} />}
@@ -3656,4 +4072,4 @@ export default function KrushCompetitionApp() {
   );
 }
 function SplashOrWelcome({ onSignUp, onLogIn }) { const [s, setS] = useState(true); return s ? <SplashScreen onNext={() => setS(false)} /> : <WelcomeScreen onSignUp={onSignUp} onLogIn={onLogIn} />; }
-function Shell({ children }) { return <div style={{ background: C.ink, fontFamily: 'system-ui, -apple-system, sans-serif' }} className="w-full h-screen max-w-md mx-auto overflow-y-auto relative">{children}</div>; }
+function Shell({ children }) { return <div data-krush-shell="1" style={{ background: C.ink, fontFamily: 'system-ui, -apple-system, sans-serif' }} className="w-full h-screen max-w-md mx-auto overflow-y-auto relative">{children}</div>; }
